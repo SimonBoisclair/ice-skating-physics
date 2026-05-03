@@ -24,25 +24,39 @@ wp.set_device("cuda:0")
 
 # ─── Mesh constants ───
 HOLLOW_RADIUS_DEFAULT = 0.015875  # 5/8" = 15.875mm in meters
-STL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "blade-holder-cad.stl")
+STL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "blade-holder-cad-watertight.stl")
 USE_MESH_COLLISION = True  # set False to fall back to box collision
 
 # ─── Physics constants ───
 SCALE = 50  # Scale factor for particle resolution
 BLADE_LEN_REAL = 0.280  # meters (real blade)
 BLADE_W_REAL = 0.003
-BLADE_H_REAL = 0.030
+BLADE_H_REAL = 0.0594  # watertight blade height (59.4mm, holder removed)
 
 BLADE_LEN = BLADE_LEN_REAL * SCALE  # 14.0m
 BLADE_W = BLADE_W_REAL * SCALE      # 0.15m
-BLADE_H = BLADE_H_REAL * SCALE      # 1.5m
+BLADE_H = BLADE_H_REAL * SCALE      # 2.97m
+# Cutting edge offset: distance from blade center (sim origin) to cutting edge
+# In local frame, cutting edge is at sim_z = -(BLADE_H_REAL/2)*SCALE
+BLADE_EDGE_OFFSET = (BLADE_H_REAL / 2.0) * SCALE  # 1.485 scaled
 
-# Ice particle field — tight box around blade contact zone
-# Width must handle lean sweep: at 45° lean, blade edge shifts ~15mm laterally
-ICE_L = 0.300 * SCALE    # 300mm = 15.0 scaled (full blade length)
-ICE_W = 0.025 * SCALE    # 25mm = 1.25 scaled (handles lean sweep up to 45°)
-ICE_H = 0.002 * SCALE    # 2mm = 0.1 scaled (max pen depth + margin)
-# 240k particles in 300×25×2mm = 15,000mm³ → 16 particles/mm³
+# Ice sheet: 500×500×15mm solid ice surface
+ICE_SHEET_L = 0.500 * SCALE   # 500mm = 25.0 scaled
+ICE_SHEET_W = 0.500 * SCALE   # 500mm = 25.0 scaled
+ICE_SHEET_H = 0.015 * SCALE   # 15mm = 0.75 scaled
+
+# Particle pool: 300×50×5mm hole in center of ice sheet
+# Particles simulate the deformable ice in the blade contact zone
+POOL_L = 0.300 * SCALE    # 300mm = 15.0 scaled
+POOL_W = 0.050 * SCALE    # 50mm = 2.5 scaled
+POOL_H = 0.005 * SCALE    # 5mm = 0.25 scaled
+
+# Legacy aliases (used by particle init and settle)
+ICE_L = POOL_L
+ICE_W = POOL_W
+ICE_H = POOL_H
+
+# 240k particles in 300×50×5mm = 75,000mm³ → 3.2 particles/mm³
 N_ICE = 240000
 
 DT = 0.001
@@ -82,20 +96,22 @@ def init_ice(
     pos: wp.array(dtype=wp.vec3),
     vel: wp.array(dtype=wp.vec3),
     n: int,
-    ice_l: float,
-    ice_w: float,
-    ice_h: float,
+    pool_l: float,
+    pool_w: float,
+    pool_h: float,
+    pool_bottom_z: float,
     seed: int,
 ):
+    """Initialize particles in the pool hole (depression in ice sheet surface)."""
     i = wp.tid()
     if i >= n:
         return
     s1 = wp.rand_init(seed, i)
     s2 = wp.rand_init(seed, i + n)
     s3 = wp.rand_init(seed, i + 2 * n)
-    x = wp.randf(s1, -ice_l / 2.0, ice_l / 2.0)
-    y = wp.randf(s2, -ice_w / 2.0, ice_w / 2.0)
-    z = wp.randf(s3, 0.0, ice_h)
+    x = wp.randf(s1, -pool_l / 2.0, pool_l / 2.0)
+    y = wp.randf(s2, -pool_w / 2.0, pool_w / 2.0)
+    z = wp.randf(s3, pool_bottom_z, pool_bottom_z + pool_h)
     pos[i] = wp.vec3(x, y, z)
     vel[i] = wp.vec3(0.0, 0.0, 0.0)
 
@@ -107,12 +123,13 @@ def recenter_ice(
     blade_cx: float,
     blade_cy: float,
     n: int,
-    ice_l: float,
-    ice_w: float,
-    ice_h: float,
+    pool_l: float,
+    pool_w: float,
+    pool_h: float,
+    pool_bottom_z: float,
     seed_offset: int,
 ):
-    """Wrap particles that are too far from blade back to other side (infinite ice sheet)."""
+    """Wrap particles that escape pool boundaries back to opposite side."""
     i = wp.tid()
     if i >= n:
         return
@@ -120,9 +137,8 @@ def recenter_ice(
     dx = p[0] - blade_cx
     dy = p[1] - blade_cy
     
-    # If particle is outside ice region around blade, wrap to opposite side
-    half_l = ice_l / 2.0
-    half_w = ice_w / 2.0
+    half_l = pool_l / 2.0
+    half_w = pool_w / 2.0
     new_x = p[0]
     new_y = p[1]
     new_z = p[2]
@@ -143,9 +159,8 @@ def recenter_ice(
         reset = True
     
     if reset:
-        # Reset wrapped particle to fresh ice at random height
         s = wp.rand_init(seed_offset, i)
-        new_z = wp.randf(s, 0.0, ice_h)
+        new_z = wp.randf(s, pool_bottom_z, pool_bottom_z + pool_h)
         pos[i] = wp.vec3(new_x, new_y, new_z)
         vel[i] = wp.vec3(0.0, 0.0, 0.0)
     
@@ -191,7 +206,7 @@ def load_blade_mesh(stl_path, scale, hollow_radius=HOLLOW_RADIUS_DEFAULT):
     # sim_x = stl_x (along blade)
     # sim_y = stl_z (across blade / thickness)  
     # sim_z = stl_y - blade_center (height, centered on blade)
-    blade_center_y = BLADE_H_REAL / 2.0  # 0.015m
+    blade_center_y = BLADE_H_REAL / 2.0  # 0.0297m (blade center height)
     
     transformed = np.zeros_like(verts)
     transformed[:, 0] = verts[:, 0] * scale           # along blade
@@ -440,6 +455,10 @@ def physics_step_mesh(
     stiffness: float,
     damping: float,
     particle_r: float,
+    pool_bottom_z: float,
+    pool_top_z: float,
+    pool_half_l: float,
+    pool_half_w: float,
 ):
     """Physics step with real CAD mesh collision.
     
@@ -457,9 +476,9 @@ def physics_step_mesh(
 
     force = wp.vec3(0.0, 0.0, -G * ICE_RHO)
 
-    # Ground plane
-    if p[2] < particle_r:
-        pen = particle_r - p[2]
+    # Pool floor (bottom of particle pool)
+    if p[2] < pool_bottom_z + particle_r:
+        pen = pool_bottom_z + particle_r - p[2]
         force = force + wp.vec3(0.0, 0.0, pen * stiffness)
         vt = wp.vec3(v[0], v[1], 0.0)
         sp = wp.length(vt)
@@ -467,6 +486,27 @@ def physics_step_mesh(
             fn = pen * stiffness
             ff = wp.min(fn * 0.3, sp * damping)
             force = force - wp.normalize(vt) * ff
+
+    # Pool ceiling (ice surface level — particles can't escape above)
+    if p[2] > pool_top_z - particle_r:
+        pen = p[2] - (pool_top_z - particle_r)
+        force = force + wp.vec3(0.0, 0.0, -pen * stiffness * 0.5)
+
+    # Pool walls (X boundaries)
+    if p[0] < -pool_half_l + particle_r:
+        pen = -pool_half_l + particle_r - p[0]
+        force = force + wp.vec3(pen * stiffness, 0.0, 0.0)
+    if p[0] > pool_half_l - particle_r:
+        pen = p[0] - (pool_half_l - particle_r)
+        force = force + wp.vec3(-pen * stiffness, 0.0, 0.0)
+
+    # Pool walls (Y boundaries)
+    if p[1] < -pool_half_w + particle_r:
+        pen = -pool_half_w + particle_r - p[1]
+        force = force + wp.vec3(0.0, pen * stiffness, 0.0)
+    if p[1] > pool_half_w - particle_r:
+        pen = p[1] - (pool_half_w - particle_r)
+        force = force + wp.vec3(0.0, -pen * stiffness, 0.0)
 
     # Transform particle into blade local frame
     cos_y = wp.cos(blade_yaw)
@@ -587,6 +627,10 @@ def physics_step(
     stiffness: float,
     damping: float,
     particle_r: float,
+    pool_bottom_z: float,
+    pool_top_z: float,
+    pool_half_l: float,
+    pool_half_w: float,
 ):
     i = wp.tid()
     if i >= n:
@@ -598,9 +642,9 @@ def physics_step(
 
     force = wp.vec3(0.0, 0.0, -G * ICE_RHO)
 
-    # Ground plane
-    if p[2] < particle_r:
-        pen = particle_r - p[2]
+    # Pool floor
+    if p[2] < pool_bottom_z + particle_r:
+        pen = pool_bottom_z + particle_r - p[2]
         force = force + wp.vec3(0.0, 0.0, pen * stiffness)
         vt = wp.vec3(v[0], v[1], 0.0)
         sp = wp.length(vt)
@@ -608,6 +652,27 @@ def physics_step(
             fn = pen * stiffness
             ff = wp.min(fn * 0.3, sp * damping)
             force = force - wp.normalize(vt) * ff
+
+    # Pool ceiling
+    if p[2] > pool_top_z - particle_r:
+        pen = p[2] - (pool_top_z - particle_r)
+        force = force + wp.vec3(0.0, 0.0, -pen * stiffness * 0.5)
+
+    # Pool walls (X)
+    if p[0] < -pool_half_l + particle_r:
+        pen = -pool_half_l + particle_r - p[0]
+        force = force + wp.vec3(pen * stiffness, 0.0, 0.0)
+    if p[0] > pool_half_l - particle_r:
+        pen = p[0] - (pool_half_l - particle_r)
+        force = force + wp.vec3(-pen * stiffness, 0.0, 0.0)
+
+    # Pool walls (Y)
+    if p[1] < -pool_half_w + particle_r:
+        pen = -pool_half_w + particle_r - p[1]
+        force = force + wp.vec3(0.0, pen * stiffness, 0.0)
+    if p[1] > pool_half_w - particle_r:
+        pen = p[1] - (pool_half_w - particle_r)
+        force = force + wp.vec3(0.0, -pen * stiffness, 0.0)
 
     # Transform particle into blade local frame
     # Blade orientation: yaw around Z, then lean around local X
@@ -720,10 +785,10 @@ class BladePhysics:
     def __init__(self):
         # All positions in SCALED coordinates to match particles
         # Position blade so cutting edge is at ice surface (accounting for lean)
-        # edge_world_z = pos[2] - 0.75*cos(lean) = ICE_H
-        # → pos[2] = ICE_H + 0.75*cos(lean)
+        # edge_world_z = pos[2] - BLADE_EDGE_OFFSET*cos(lean) = ICE_SHEET_H
+        # → pos[2] = ICE_SHEET_H + BLADE_EDGE_OFFSET*cos(lean)
         init_lean = 15.0 * math.pi / 180
-        self.pos = np.array([0.0, 0.0, ICE_H + 0.75 * math.cos(init_lean)])
+        self.pos = np.array([0.0, 0.0, ICE_SHEET_H + BLADE_EDGE_OFFSET * math.cos(init_lean)])
         self.vel = np.array([0.0, 0.0, 0.0])  # velocity in scaled coords/s
         self.yaw = 0.0
         self.lean = 15.0 * math.pi / 180  # radians — user-set lean angle (θ)
@@ -793,13 +858,14 @@ class BladePhysics:
         # yaw = travel/heading direction (updated by arc turning)
         # alpha = offset angle (foot opening)
 
+        pool_bottom = float(ICE_SHEET_H - POOL_H)
         wp.launch(init_ice, dim=N_ICE,
                   inputs=[self.ice_pos, self.ice_vel, N_ICE,
-                          ICE_L, ICE_W, ICE_H, 42],
+                          POOL_L, POOL_W, POOL_H, pool_bottom, 42],
                   device="cuda:0")
         wp.synchronize()
 
-        # Settle ice particles (no blocking settle — Z dynamics in step() will converge)
+        # Settle ice particles
         print("[physics] Settling ice particles...", flush=True)
         self.recenter_seed = 1000
         for i in range(200):
@@ -825,11 +891,12 @@ class BladePhysics:
     def _step_particles(self):
         # Recenter ice particles around blade (infinite ice sheet)
         self.recenter_seed += 1
+        pool_bottom = float(ICE_SHEET_H - POOL_H)
         wp.launch(recenter_ice, dim=N_ICE,
                   inputs=[
                       self.ice_pos, self.ice_vel,
                       float(self.pos[0]), float(self.pos[1]),
-                      N_ICE, ICE_L, ICE_W, ICE_H,
+                      N_ICE, POOL_L, POOL_W, POOL_H, pool_bottom,
                       self.recenter_seed,
                   ],
                   device="cuda:0")
@@ -844,6 +911,12 @@ class BladePhysics:
         # Blade physical orientation in particles = yaw + alpha
         blade_dir = self.yaw + self.alpha
         
+        # Pool geometry: particles confined to depression in ice sheet surface
+        pool_top = float(ICE_SHEET_H)              # ice surface level
+        pool_bottom = float(ICE_SHEET_H - POOL_H)  # pool floor
+        pool_hl = float(POOL_L / 2.0)
+        pool_hw = float(POOL_W / 2.0)
+        
         if self.blade_mesh is not None:
             # Use real CAD mesh collision
             wp.launch(physics_step_mesh, dim=N_ICE,
@@ -856,6 +929,7 @@ class BladePhysics:
                           self.blade_force,
                           self.pen_out,
                           N_ICE, DT, STIFFNESS, DAMPING, PARTICLE_R,
+                          pool_bottom, pool_top, pool_hl, pool_hw,
                       ],
                       device="cuda:0")
         else:
@@ -869,6 +943,7 @@ class BladePhysics:
                           self.blade_force,
                           self.pen_out,
                           N_ICE, DT, STIFFNESS, DAMPING, PARTICLE_R,
+                          pool_bottom, pool_top, pool_hl, pool_hw,
                       ],
                       device="cuda:0")
 
@@ -879,19 +954,20 @@ class BladePhysics:
         wp.synchronize()
 
     def settle_blade_quick(self, steps=50):
-        """Settle blade Z so GPU penetration matches physics equilibrium.
+        """Settle blade Z to equilibrium penetration depth.
         
-        Uses the analytical solver to compute expected equilibrium depth,
-        then adjusts blade Z (via binary search on pen_max_mm) until the
-        GPU particle simulation produces that depth.
+        Uses the analytical equilibrium solver (F_normal = H × Lc × w) to compute
+        the target penetration, then positions the blade and runs GPU particle
+        physics to establish contact forces and validate the depth.
         
-        After settling, pen_max_mm reflects the real GPU measurement at
-        the physically correct blade position.
+        The watertight mesh provides reliable signed-distance queries for
+        accurate per-particle penetration measurement.
         """
         F_normal_real = self.blade_mass * G * math.cos(self.lean)
+        cos_lean = math.cos(self.lean)
         
-        # Compute target penetration from analytical model
-        target_pen_mm = 0.3  # default fallback
+        # Compute equilibrium penetration from analytical model
+        target_pen_mm = 0.3  # fallback
         if self.blade_geom is not None:
             H_pa = self.ice_hardness_mpa * 1e6
             lean_deg = abs(math.degrees(self.lean))
@@ -901,34 +977,31 @@ class BladePhysics:
             )
             self.pen_analytical_mm = target_pen_mm
         
-        target_pen_mm = max(0.01, target_pen_mm)  # ensure nonzero
+        target_pen_mm = max(0.01, target_pen_mm)
         
-        # Position blade so cutting edge is at target depth below ice surface.
-        # The cutting edge is at local z=-0.75, which in world frame
-        # (accounting for lean rotation) is:
-        #   edge_world_z = blade_cz - 0.75 * cos(lean)
-        #   edge_world_y = blade_cy + 0.75 * sin(lean)
-        # We want edge_world_z = ICE_H - target_pen_scaled
+        # Position blade at equilibrium depth
         target_pen_scaled = target_pen_mm / 1000.0 * SCALE
-        edge_target_z = ICE_H - target_pen_scaled
-        target_z = edge_target_z + 0.75 * math.cos(self.lean)
-        
-        print(f"[settle] target_pen={target_pen_mm:.3f}mm (scaled={target_pen_scaled:.4f}), "
-              f"F_n={F_normal_real:.0f}N, target_Z={target_z:.4f}", flush=True)
+        edge_target_z = ICE_SHEET_H - target_pen_scaled
+        target_z = edge_target_z + BLADE_EDGE_OFFSET * cos_lean
         
         self.pos[2] = target_z
         self.vel = np.array([0.0, 0.0, 0.0])
         self.vel_z = 0.0
         
-        # Reinitialize particles fresh so they fill the contact zone
+        print(f"[settle] pen={target_pen_mm:.3f}mm, F_n={F_normal_real:.0f}N, "
+              f"lean={math.degrees(self.lean):.1f}°, Z={target_z:.4f}", flush=True)
+        
+        # Reinitialize particles fresh in the pool
+        pool_bottom = float(ICE_SHEET_H - POOL_H)
+        self.recenter_seed += 1
         wp.launch(init_ice, dim=N_ICE,
                   inputs=[self.ice_pos, self.ice_vel,
-                          N_ICE, ICE_L, ICE_W, ICE_H,
+                          N_ICE, POOL_L, POOL_W, POOL_H, pool_bottom,
                           self.recenter_seed + self.frame],
                   device="cuda:0")
         wp.synchronize()
         
-        # Run physics steps — track peak contact count to find best measurement
+        # Run GPU physics to establish particle contact with watertight mesh
         best_pen = 0.0
         best_cnt = 0
         best_sum = 0.0
@@ -941,17 +1014,19 @@ class BladePhysics:
                 best_sum = float(ps[1])
                 best_cnt = cnt
         
-        print(f"  [settle] best: particle_pen={best_pen*1000/SCALE:.3f}mm cnt={best_cnt}", flush=True)
+        # Read final reaction force
+        bf = self.blade_force.numpy()[0]
+        self.reaction_fz_real = float(bf[2]) / SCALE
         
-        # Penetration depth = geometric: how far blade edge is below ice surface
-        # edge_world_z = pos[2] - 0.75 * cos(lean)
-        # pen = ICE_H - edge_world_z  (positive = below surface)
-        edge_z = self.pos[2] - 0.75 * math.cos(self.lean)
-        geo_pen_scaled = ICE_H - edge_z
-        geo_pen_mm = geo_pen_scaled / SCALE * 1000.0
+        # GPU penetration from particle signed-distance (watertight mesh)
+        gpu_pen_mm = best_pen * 1000.0 / SCALE if best_cnt > 0 else 0.0
         
-        self.pen_max_mm = max(0.0, geo_pen_mm)
-        self.pen_avg_mm = self.pen_max_mm * 0.6  # approximate: avg is ~60% of max
+        # Use geometric pen (reliable, independent of particle noise)
+        edge_z = self.pos[2] - BLADE_EDGE_OFFSET * cos_lean
+        geo_pen_mm = max(0.0, (ICE_SHEET_H - edge_z) / SCALE * 1000.0)
+        
+        self.pen_max_mm = geo_pen_mm
+        self.pen_avg_mm = geo_pen_mm * 0.6
         self.pen_contact_count = best_cnt
         particle_r_real_m = PARTICLE_R / SCALE
         particle_area_mm2 = math.pi * (particle_r_real_m * 1000) ** 2
@@ -966,13 +1041,12 @@ class BladePhysics:
             self.contact_width_mm = cwid * 1000
             self.contact_area_mm2 = carea * 1e6
         
-        self.vel_z = 0.0
-        self.vel = np.array([0.0, 0.0, 0.0])
         self.blade_force.zero_()
         self.force_accum_along = 0.0
         self.force_accum_perp = 0.0
         
-        print(f"[settle] DONE Z={self.pos[2]:.4f}, GPU_pen={self.pen_max_mm:.3f}mm, target={target_pen_mm:.3f}mm", flush=True)
+        print(f"[settle] DONE pen={geo_pen_mm:.3f}mm, GPU_particle_pen={gpu_pen_mm:.3f}mm, "
+              f"cnt={best_cnt}, F_n={F_normal_real:.0f}N", flush=True)
 
     def step(self):
         self.frame += 1
@@ -1009,8 +1083,8 @@ class BladePhysics:
         # on every parameter change. Between settles, Z stays fixed.
 
         # Penetration = geometric depth of blade edge below ice surface
-        edge_z = self.pos[2] - 0.75 * math.cos(self.lean)
-        geo_pen_mm = max(0.0, (ICE_H - edge_z) / SCALE * 1000.0)
+        edge_z = self.pos[2] - BLADE_EDGE_OFFSET * math.cos(self.lean)
+        geo_pen_mm = max(0.0, (ICE_SHEET_H - edge_z) / SCALE * 1000.0)
         d = self.force_decay
         self.pen_max_mm = d * self.pen_max_mm + (1 - d) * geo_pen_mm
         self.pen_avg_mm = self.pen_max_mm * 0.6
@@ -1286,6 +1360,13 @@ class BladePhysics:
             'f_along': round(f_along_disp, 1),
             'f_lateral': round(f_perp_disp, 1),
             'n_ice': N_ICE,
+            # Ice geometry (real mm for frontend)
+            'ice_sheet_l_mm': round(ICE_SHEET_L / SCALE * 1000, 0),
+            'ice_sheet_w_mm': round(ICE_SHEET_W / SCALE * 1000, 0),
+            'ice_sheet_h_mm': round(ICE_SHEET_H / SCALE * 1000, 1),
+            'pool_l_mm': round(POOL_L / SCALE * 1000, 0),
+            'pool_w_mm': round(POOL_W / SCALE * 1000, 0),
+            'pool_h_mm': round(POOL_H / SCALE * 1000, 1),
         }
 
     def handle_command(self, cmd):
@@ -1356,7 +1437,7 @@ class BladePhysics:
         elif t == 'yaw':
             self.yaw = cmd.get('value', 0) * math.pi / 180
         elif t == 'reset':
-            self.pos = np.array([0.0, 0.0, ICE_H + 0.75 * math.cos(self.lean)])
+            self.pos = np.array([0.0, 0.0, ICE_SHEET_H + BLADE_EDGE_OFFSET * math.cos(self.lean)])
             self.vel = np.array([0.0, 0.0, 0.0])
             self.yaw = 0.0
             self.lean = 15.0 * math.pi / 180
@@ -1374,9 +1455,10 @@ class BladePhysics:
             self.peak_push_speed = 0.0
             self.force_accum_along = 0.0
             self.force_accum_perp = 0.0
+            pool_bottom = float(ICE_SHEET_H - POOL_H)
             wp.launch(init_ice, dim=N_ICE,
                       inputs=[self.ice_pos, self.ice_vel,
-                              N_ICE, ICE_L, ICE_W, ICE_H, 42],
+                              N_ICE, POOL_L, POOL_W, POOL_H, pool_bottom, 42],
                       device="cuda:0")
             wp.synchronize()
             self.settle_blade_quick()
