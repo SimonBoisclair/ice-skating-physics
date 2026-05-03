@@ -834,9 +834,13 @@ class BladePhysics:
         # Position in real coords for display
         pos_real = [self.pos[0] / SCALE, self.pos[1] / SCALE, self.pos[2] / SCALE]
 
+        # Velocity in real coords (m/s)
+        vel_real = [self.vel[0] / SCALE, self.vel[1] / SCALE, 0.0]
+        
         return {
             'type': 'state',
             'pos': [round(pos_real[0], 6), round(pos_real[1], 6), round(pos_real[2], 6)],
+            'vel': [round(vel_real[0], 6), round(vel_real[1], 6), round(vel_real[2], 6)],
             'speed': round(speed_real, 6),
             'va': round(va, 6),
             'vp': round(vp, 6),
@@ -854,9 +858,11 @@ class BladePhysics:
             'contact_z': 0.0,
             # Article variables: G (COM), L (P→G distance), forces
             'L': round(self.L, 4),
-            'G_height': round(self.G_pos[2], 4),
+            'G_pos': [round(self.G_pos[0], 6), round(self.G_pos[1], 6), round(self.G_pos[2], 6)],
             'Fx': round(self.Fx, 2),  # centripetal force (N)
             'Fy': round(self.Fy, 2),  # normal force = mg (N)
+            'Fg': round(self.blade_mass * G, 2),  # gravity force (N)
+            'mass': round(self.blade_mass, 1),
             'ac': round(self.ac, 4),  # centripetal acceleration (m/s²)
             'theta_balance': round(math.degrees(self.theta_balance), 2),  # required lean for balance (deg)
             'theta_actual': round(math.degrees(abs(self.lean)), 2),  # actual lean (deg)

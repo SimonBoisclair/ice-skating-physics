@@ -121,31 +121,36 @@ button.active{background:#0074D9;color:#fff;border-color:#0074D9}
     <div class="hint">-1&deg;C=warm/soft &middot; -5&deg;C=rink &middot; -20&deg;C=outdoor cold</div></div>
 </div>
 
-<!-- ═══ AUTO-COMPUTED ═══ -->
+<!-- ═══ GPU-COMPUTED VALUES ═══ -->
 <div class="sec">
-  <div class="sec-t">AUTO-COMPUTED</div>
-  <div class="pr"><span class="pl">Ice hardness</span><span><span class="pv" id="dHard">4.8</span><span class="pu">MPa</span></span></div>
-  <div class="pr"><span class="pl">L (G&rarr;P dist)</span><span><span class="pv blu" id="dL">0.91</span><span class="pu">m</span></span></div>
-  <div class="pr"><span class="pl">&theta; (lean from vertical)</span><span><span class="pv ylw" id="dTheta">9.5</span><span class="pu">&deg;</span></span></div>
+  <div class="sec-t">GPU-COMPUTED (real mesh collision)</div>
+  <div class="pr"><span class="pl">Collision mode</span><span class="pv blu" id="dMode">---</span></div>
+  <div class="pr"><span class="pl">Hollow radius</span><span><span class="pv" id="dHollow">---</span><span class="pu">mm</span></span></div>
   <hr style="border-color:#1e2d42;margin:3px 0">
-  <div class="pr"><span class="pl">F_gravity</span><span><span class="pv grn" id="dFg">833.9</span><span class="pu">N &darr;</span></span></div>
-  <div class="pr"><span class="pl">F_body (G&rarr;P)</span><span><span class="pv blu" id="dFbody">845.2</span><span class="pu">N</span></span></div>
-  <div class="pr"><span class="pl">F_normal (into ice)</span><span><span class="pv" id="dFn">833.9</span><span class="pu">N</span></span></div>
-  <div class="pr"><span class="pl">F_tangential</span><span><span class="pv" id="dFt">0.0</span><span class="pu">N</span></span></div>
+  <div class="pr"><span class="pl">Speed</span><span><span class="pv grn" id="dSpeed">---</span><span class="pu">m/s</span></span></div>
+  <div class="pr"><span class="pl">v_along (blade)</span><span><span class="pv" id="dVa">---</span><span class="pu">m/s</span></span></div>
+  <div class="pr"><span class="pl">v_perp (across)</span><span><span class="pv" id="dVp">---</span><span class="pu">m/s</span></span></div>
   <hr style="border-color:#1e2d42;margin:3px 0">
-  <div class="pr"><span class="pl">Pen. depth</span><span><span class="pv org" id="dDepth">0.87</span><span class="pu">mm</span></span></div>
-  <div class="pr"><span class="pl">Polygon length</span><span><span class="pv org" id="dPolyL">42</span><span class="pu">mm</span></span></div>
-  <div class="pr"><span class="pl">Polygon width</span><span><span class="pv org" id="dPolyW">1.2</span><span class="pu">mm</span></span></div>
-  <div class="pr"><span class="pl">Contact edge</span><span class="pv" id="dEdge">inside</span></div>
-  <div class="pr"><span class="pl">Active zone</span><span class="pv" id="dZone">Zone 2 (9')</span></div>
+  <div class="pr"><span class="pl">F_gravity</span><span><span class="pv grn" id="dFg">---</span><span class="pu">N &darr;</span></span></div>
+  <div class="pr"><span class="pl">F_lateral (GPU)</span><span><span class="pv red" id="dFlat">---</span><span class="pu">N</span></span></div>
+  <div class="pr"><span class="pl">F_along (GPU)</span><span><span class="pv grn" id="dFalong">---</span><span class="pu">N</span></span></div>
+  <div class="pr"><span class="pl">Pen. depth (GPU)</span><span><span class="pv org" id="dDepth">---</span><span class="pu">mm</span></span></div>
   <hr style="border-color:#1e2d42;margin:3px 0">
-  <div class="pr"><span class="pl">R_along (groove fric)</span><span><span class="pv grn" id="dRalong">0.0</span><span class="pu">N</span></span></div>
-  <div class="pr"><span class="pl">R_across (groove wall)</span><span><span class="pv red" id="dRacross">0.0</span><span class="pu">N</span></span></div>
-  <div class="pr"><span class="pl">R_normal (supports wt)</span><span><span class="pv" id="dRnormal">833.9</span><span class="pu">N</span></span></div>
+  <div class="pr"><span class="pl">Lean (actual)</span><span><span class="pv ylw" id="dTheta">---</span><span class="pu">&deg;</span></span></div>
+  <div class="pr"><span class="pl">&alpha; (foot opening)</span><span><span class="pv" id="dAlphaGPU">---</span><span class="pu">&deg;</span></span></div>
+  <div class="pr"><span class="pl">Active zone</span><span class="pv" id="dZone">---</span></div>
+  <div class="pr"><span class="pl">Turn radius R</span><span><span class="pv" id="dR">---</span><span class="pu">m</span></span></div>
+  <div class="pr"><span class="pl">&theta;_balance (required)</span><span><span class="pv ylw" id="dThetaBal">---</span><span class="pu">&deg;</span></span></div>
+  <div class="pr"><span class="pl">L (G&rarr;P dist)</span><span><span class="pv blu" id="dL">---</span><span class="pu">m</span></span></div>
   <hr style="border-color:#1e2d42;margin:3px 0">
-  <div class="pr"><span class="pl">Turn radius R</span><span><span class="pv" id="dR">&infin;</span><span class="pu">m</span></span></div>
-  <div class="pr"><span class="pl">&theta;_balance (required)</span><span><span class="pv ylw" id="dThetaBal">0.0</span><span class="pu">&deg;</span></span></div>
-  <div class="pr"><span class="pl">Balance</span><span class="pv grn" id="dBal">BALANCED</span></div>
+  <div class="pr"><span class="pl">SPS</span><span class="pv" id="dSPS">---</span></div>
+  <div class="pr"><span class="pl">Frame</span><span class="pv" id="dFrame">---</span></div>
+  <div class="pr"><span class="pl">Particles</span><span class="pv" id="dParts">---</span></div>
+  <div class="btn-row">
+    <button onclick="wsSend({cmd:'toggle_mesh'})">Toggle Mesh/Box</button>
+    <button onclick="wsSend({cmd:'reset'})">Reset Ice</button>
+    <button onclick="wsSend({cmd:'push',fx:0,fy:0,force:2})">Push</button>
+  </div>
 </div>
 
 <!-- ═══ CAMERA ═══ -->
@@ -171,41 +176,11 @@ button.active{background:#0074D9;color:#fff;border-color:#0074D9}
   <div class="hint">280mm blade &middot; 5/8" hollow</div>
 </div>
 
-<!-- ═══ GPU PHYSICS ═══ -->
+<!-- ═══ HOLLOW RADIUS ═══ -->
 <div class="sec">
-  <div class="sec-t">GPU PHYSICS (from server)</div>
-  <div class="pr"><span class="pl">Collision mode</span><span class="pv blu" id="dMode">---</span></div>
-  <div class="pr"><span class="pl">Hollow radius</span><span><span class="pv" id="dHollow">---</span><span class="pu">mm</span></span></div>
-  <div class="pr"><span class="pl">Speed</span><span><span class="pv grn" id="dSpeed">---</span><span class="pu">m/s</span></span></div>
-  <div class="pr"><span class="pl">v_along (blade)</span><span><span class="pv" id="dVa">---</span><span class="pu">m/s</span></span></div>
-  <div class="pr"><span class="pl">v_perp (across)</span><span><span class="pv" id="dVp">---</span><span class="pu">m/s</span></span></div>
-  <hr style="border-color:#1e2d42;margin:3px 0">
-  <div class="pr"><span class="pl">F_lateral (GPU)</span><span><span class="pv red" id="dFlat">---</span><span class="pu">N</span></span></div>
-  <div class="pr"><span class="pl">F_along (GPU)</span><span><span class="pv grn" id="dFalong">---</span><span class="pu">N</span></span></div>
-  <div class="pr"><span class="pl">Pen. depth (GPU)</span><span><span class="pv org" id="dPenGPU">---</span><span class="pu">mm</span></span></div>
-  <hr style="border-color:#1e2d42;margin:3px 0">
-  <div class="pr"><span class="pl">SPS</span><span class="pv" id="dSPS">---</span></div>
-  <div class="pr"><span class="pl">Frame</span><span class="pv" id="dFrame">---</span></div>
-  <div class="pr"><span class="pl">Particles</span><span class="pv" id="dParts">---</span></div>
-  <div class="btn-row">
-    <button onclick="wsSend({cmd:'toggle_mesh'})">Toggle Mesh/Box</button>
-    <button onclick="wsSend({cmd:'reset'})">Reset Ice</button>
-  </div>
+  <div class="sec-t">HOLLOW GRIND</div>
   <div class="cr"><div class="ch"><span class="cn">Hollow (mm)</span><span class="cv-wrap"><input type="number" class="ni" id="nHollow" min="5" max="50" step="0.5" value="15.875"><span class="pu">mm</span></span></div>
     <input type="range" id="sHollow" min="5" max="50" step="0.5" value="15.875">
-  </div>
-</div>
-
-<!-- ═══ EQUATIONS ═══ -->
-<div class="sec">
-  <div class="sec-t">KEY EQUATIONS (analytical)</div>
-  <div style="font-family:monospace;font-size:10px;color:#7a9abb;line-height:1.4">
-    Fy = m&middot;g<br>
-    F_body = m&middot;g / cos(&theta;)<br>
-    tan(&theta;) = v&sup2;/(R&middot;g)<br>
-    depth = F_n / (H &middot; L_contact)<br>
-    R_along = &mu; &middot; F_n<br>
-    R_across = H &middot; A_groove &middot; v_perp
   </div>
 </div>
 </div>
@@ -260,133 +235,56 @@ const S = {
 };
 
 // ═══════════════════════════════════════════════════
-// PHYSICS COMPUTATIONS (all auto-calculated)
+// ICE HARDNESS (for sending to server)
 // ═══════════════════════════════════════════════════
 function iceHardness(tempC) {
-  // Barnes & Tabor (1966), Poirier et al. (2011)
-  // Roughly: H = 0.65 * |T| + 1.5 MPa
-  // Clamp to 1-20 MPa
   return Math.max(1, Math.min(20, 0.65 * Math.abs(tempC) + 1.5));
 }
 
-function getActiveZone(pitch) {
-  if (pitch < -0.6) return { idx: 1, name: "Zone 4 (15')", R: ZONE_RADII_M[1] };
-  if (pitch < -0.2) return { idx: 2, name: "Zone 3 (12')", R: ZONE_RADII_M[2] };
-  if (pitch < 0.2)  return { idx: 3, name: "Zone 2 (9')",  R: ZONE_RADII_M[3] };
-  if (pitch < 0.6)  return { idx: 4, name: "Zone 1 (6')",  R: ZONE_RADII_M[4] };
-  return { idx: 4, name: "Zone 1 (6')", R: ZONE_RADII_M[4] };
-}
-
-function computeAll() {
-  const H_mpa = iceHardness(S.temp);
-  const H_pa = H_mpa * 1e6;
-  const zone = getActiveZone(S.pitch);
-  const leanRad = S.lean * Math.PI / 180;
+// ═══════════════════════════════════════════════════
+// GPU STATE → SCENE DATA (replaces analytical computeAll)
+// ═══════════════════════════════════════════════════
+function getSceneData() {
   const alphaRad = S.alpha * Math.PI / 180;
+  const leanRad = S.lean * Math.PI / 180;
 
-  // ── L and theta from G position relative to P ──
+  // G→P geometry (from slider inputs — positioning)
   const dx = S.gx - S.px;
   const dy = S.gy - S.py;
-  const dz = S.gz; // P is at z=0
-  const dh = Math.sqrt(dx*dx + dy*dy); // horizontal distance
+  const dz = S.gz;
+  const dh = Math.sqrt(dx*dx + dy*dy);
   const L = Math.sqrt(dh*dh + dz*dz);
-  const theta = Math.atan2(dh, dz); // angle from vertical
+  const theta = Math.atan2(dh, dz);
   const thetaDeg = theta * 180 / Math.PI;
 
-  // ── Forces from G ──
-  const Fg = S.mass * G_ACC; // gravity (N), always downward
+  // Use GPU state for physics values when available
+  const g = window.gpuState || {};
+  const speed = g.speed !== undefined ? g.speed : Math.sqrt(S.gvx*S.gvx + S.gvy*S.gvy);
+  const Fg = g.Fg !== undefined ? g.Fg : S.mass * G_ACC;
+  const f_lateral = g.f_lateral !== undefined ? Math.abs(g.f_lateral) : 0;
+  const f_along = g.f_along !== undefined ? Math.abs(g.f_along) : 0;
+  const penDepth = g.pen !== undefined ? g.pen / 1000 : 0;
+  const R_turn = g.R !== undefined ? g.R : Infinity;
+  const thetaBalDeg = g.theta_balance !== undefined ? g.theta_balance : 0;
+  const zone_name = g.zone_name || "---";
 
-  // F_body: force along the line G→P (body compression)
-  // In static equilibrium, the body force balances gravity along the body axis
-  const F_body = dz > 0.01 ? Fg / Math.cos(theta) : Fg;
+  // Velocity from GPU or sliders
+  const vel = g.vel || [S.gvx, S.gvy, 0];
 
-  // Decompose F_body at P into normal (into ice) and tangential (along ice)
-  const F_normal = Fg; // vertical component supports weight
-  const F_tangential = dz > 0.01 ? Fg * Math.tan(theta) : 0; // horizontal component
+  // Blade direction on ice
+  const bladeDir = [Math.cos(alphaRad), Math.sin(alphaRad)];
+  const v_along = vel[0] * bladeDir[0] + vel[1] * bladeDir[1];
+  const v_across = -vel[0] * bladeDir[1] + vel[1] * bladeDir[0];
 
-  // ── Penetration polygon ──
-  // Contact length depends on rocker zone radius and force
-  // Higher force or softer ice = longer contact, deeper penetration
-  const R_rocker = zone.R;
-
-  // Approximate contact half-length from Hertz contact theory (cylinder on flat):
-  // a = sqrt(4*F*R / (pi*E*L_blade))
-  // Simplified: contact_length proportional to sqrt(F / H)
-  const contactLenBase = 0.04; // ~40mm base contact at center
-  const forceFactor = Math.sqrt(F_normal / (85 * G_ACC)); // normalized to 85kg
-  const hardnessFactor = Math.sqrt(5 / H_mpa); // normalized to 5 MPa
-  let contactLen = contactLenBase * forceFactor * hardnessFactor;
-
-  // Pitch affects which part contacts and how long
-  const pitchAbs = Math.abs(S.pitch);
-  if (pitchAbs > 0.6) contactLen *= 0.5; // tip zones = shorter contact
-  else if (pitchAbs > 0.2) contactLen *= 0.75;
-  contactLen = Math.max(0.005, Math.min(BLADE_LEN * 0.8, contactLen));
-
-  // Penetration depth: depth = F_normal / (H * contact_length * width_factor)
-  // Width factor accounts for the edge geometry
-  const edgeWidthFactor = S.lean > 5 ? 1.0 : 2.0; // single edge vs both edges
-  const effectiveWidth = BLADE_T * edgeWidthFactor;
-  let penDepth = F_normal / (H_pa * contactLen * 50); // empirical scaling
-  penDepth = Math.max(0.0001, Math.min(0.005, penDepth)); // 0.1mm - 5mm range
-
-  // Lean increases depth (more force concentrated on one edge)
-  const leanFactor = 1.0 + Math.sin(leanRad) * 0.5;
-  penDepth *= leanFactor;
-
-  // Polygon width: very thin (blade edge), wider when flat
-  const polyWidth = S.lean > 5 ? BLADE_T * 0.5 : BLADE_T;
-
-  // Contact edge
-  const contactEdge = S.lean < 2 ? 'both' : (S.gy >= S.py ? 'inside' : 'outside');
-
-  // Contact center position along blade (shifts with pitch)
-  const contactCenterX = S.pitch * BLADE_HALF * 0.6; // shifts toward toe/heel
-
-  // ── Resistance ──
-  // Decompose velocity into along-blade and across-blade components
-  const bladeDir = [Math.cos(alphaRad), Math.sin(alphaRad)]; // blade direction on ice
-  const v_along = S.gvx * bladeDir[0] + S.gvy * bladeDir[1]; // velocity along blade
-  const v_across = -S.gvx * bladeDir[1] + S.gvy * bladeDir[0]; // velocity across blade
-
-  // Along-groove resistance: very low friction
-  const R_along = MU_ALONG * F_normal * (v_along !== 0 ? Math.sign(v_along) : 0);
-  const R_along_mag = Math.abs(R_along);
-
-  // Across-groove resistance: groove walls block lateral motion
-  // Proportional to penetration cross-section area × ice hardness × velocity
-  const grooveArea = contactLen * penDepth; // cross-section of groove wall
-  const R_across = v_across !== 0 ? H_pa * grooveArea * 0.001 * Math.sign(v_across) : 0;
-  const R_across_mag = Math.abs(R_across);
-
-  // Normal resistance (ice supports weight)
-  const R_normal = F_normal;
-
-  // ── Turn radius ──
-  const leanFac = Math.min(1.0, S.lean / 45);
-  const R_turn = leanFac > 0.001 ? R_rocker / leanFac : Infinity;
-
-  // ── Balance ──
-  const speed = Math.sqrt(S.gvx*S.gvx + S.gvy*S.gvy);
-  const thetaBalRad = (isFinite(R_turn) && R_turn > 0.01 && speed > 0.5)
-    ? Math.atan2(speed*speed, R_turn * G_ACC) : 0;
-  const thetaBalDeg = thetaBalRad * 180 / Math.PI;
-
-  let balance = 'BALANCED';
-  if (speed > 0.5 && thetaDeg > 1) {
-    const diff = thetaDeg - thetaBalDeg;
-    if (diff > 8) balance = 'OVER-LEAN';
-    else if (diff < -8) balance = 'UNDER-LEAN';
-  }
+  // Contact center position along blade
+  const contactCenterX = S.pitch * BLADE_HALF * 0.6;
 
   return {
-    H_mpa, zone, L, theta, thetaDeg, leanRad, alphaRad,
-    Fg, F_body, F_normal, F_tangential,
-    penDepth, contactLen, polyWidth, contactEdge, contactCenterX,
-    v_along, v_across,
-    R_along_mag, R_across_mag, R_normal,
-    R_turn, thetaBalDeg, balance, speed,
-    bladeDir, dh, dx, dy, dz
+    alphaRad, leanRad, L, theta, thetaDeg,
+    Fg, f_lateral, f_along, penDepth,
+    R_turn, thetaBalDeg, zone_name, speed,
+    bladeDir, dh, dx, dy, dz, vel,
+    v_along, v_across, contactCenterX,
   };
 }
 
@@ -644,7 +542,7 @@ const rLbl = mkLbl('R','#888'); scene.add(rLbl);
 // UPDATE SCENE
 // ═══════════════════════════════════════════════════
 function updateScene() {
-  const c = computeAll();
+  const c = getSceneData();
   const alphaRad = c.alphaRad;
   const pitchAngle = S.pitch * MAX_PITCH_RAD;
   const zCorr = BLADE_HALF * Math.abs(Math.sin(pitchAngle));
@@ -689,15 +587,16 @@ function updateScene() {
   fgHead.rotation.set(Math.PI,0,0);
   fgLbl.position.set(S.gx+.04, S.gy, S.gz-fgLen*.5);
 
-  // Velocity arrow from G
+  // Velocity arrow from G (use GPU velocity if available)
   const speed = c.speed;
   const vLen = Math.min(speed * 0.05, 0.5);
-  const vMag = Math.sqrt(S.gvx*S.gvx + S.gvy*S.gvy + S.gvz*S.gvz);
+  const vx = c.vel[0], vy = c.vel[1], vz = c.vel[2] || 0;
+  const vMag = Math.sqrt(vx*vx + vy*vy + vz*vz);
   velLine.visible = vMag > 0.1;
   velHead.visible = vMag > 0.1;
   velLbl.visible = vMag > 0.1;
   if (vMag > 0.1) {
-    const vnx=S.gvx/vMag*vLen, vny=S.gvy/vMag*vLen, vnz=S.gvz/vMag*vLen;
+    const vnx=vx/vMag*vLen, vny=vy/vMag*vLen, vnz=vz/vMag*vLen;
     velBuf[0]=S.gx; velBuf[1]=S.gy; velBuf[2]=S.gz;
     velBuf[3]=S.gx+vnx; velBuf[4]=S.gy+vny; velBuf[5]=S.gz+vnz;
     velGeo.attributes.position.needsUpdate = true;
@@ -708,7 +607,7 @@ function updateScene() {
   }
 
   // F_body arrow (from G toward P, dashed)
-  const fbLen = Math.min(c.F_body/2000, 0.4);
+  const fbLen = Math.min(c.Fg/2000, 0.4);
   const gp = new THREE.Vector3(S.px-S.gx, S.py-S.gy, -S.gz).normalize();
   fbBuf[0]=S.gx; fbBuf[1]=S.gy; fbBuf[2]=S.gz;
   fbBuf[3]=S.gx+gp.x*fbLen; fbBuf[4]=S.gy+gp.y*fbLen; fbBuf[5]=S.gz+gp.z*fbLen;
@@ -716,10 +615,10 @@ function updateScene() {
   fbLine.computeLineDistances();
   fbLbl.position.set(S.gx+gp.x*fbLen*.5+.04, S.gy+gp.y*fbLen*.5, S.gz+gp.z*fbLen*.5);
 
-  // Resistance arrows at P
-  const raScale = 0.0005; // N to meters for arrow length
-  // Along-groove resistance
-  const raLen = Math.min(c.R_along_mag * raScale, 0.15);
+  // Resistance arrows at P (from GPU forces)
+  const raScale = 0.0005;
+  // Along-groove resistance (GPU f_along)
+  const raLen = Math.min(c.f_along * raScale, 0.15);
   raLine.visible = raLen > 0.002;
   raLbl.visible = raLen > 0.002;
   if (raLen > 0.002) {
@@ -730,8 +629,8 @@ function updateScene() {
     raLbl.position.set(raBuf[3]+.02, raBuf[4]+.02, .02);
   }
 
-  // Across-groove resistance
-  const rcLen = Math.min(c.R_across_mag * raScale * 0.01, 0.3);
+  // Across-groove resistance (GPU f_lateral)
+  const rcLen = Math.min(c.f_lateral * raScale, 0.3);
   rcLine.visible = rcLen > 0.002;
   rcLbl.visible = rcLen > 0.002;
   if (rcLen > 0.002) {
@@ -829,27 +728,26 @@ function updateScene() {
     arcPath.visible = false; rLine.visible = false; rLbl.visible = false;
   }
 
-  // ── Update HUD ──
-  document.getElementById('dHard').textContent = c.H_mpa.toFixed(1);
-  document.getElementById('dL').textContent = c.L.toFixed(2);
-  document.getElementById('dTheta').textContent = c.thetaDeg.toFixed(1);
-  document.getElementById('dFg').textContent = c.Fg.toFixed(1);
-  document.getElementById('dFbody').textContent = c.F_body.toFixed(1);
-  document.getElementById('dFn').textContent = c.F_normal.toFixed(1);
-  document.getElementById('dFt').textContent = c.F_tangential.toFixed(1);
-  document.getElementById('dDepth').textContent = (c.penDepth*1000).toFixed(2);
-  document.getElementById('dPolyL').textContent = (c.contactLen*1000).toFixed(0);
-  document.getElementById('dPolyW').textContent = (c.polyWidth*1000).toFixed(1);
-  document.getElementById('dEdge').textContent = c.contactEdge;
-  document.getElementById('dZone').textContent = c.zone.name;
-  document.getElementById('dRalong').textContent = c.R_along_mag.toFixed(1);
-  document.getElementById('dRacross').textContent = c.R_across_mag.toFixed(0);
-  document.getElementById('dRnormal').textContent = c.R_normal.toFixed(1);
-  document.getElementById('dR').textContent = isFinite(c.R_turn) ? c.R_turn.toFixed(2) : '\u221E';
-  document.getElementById('dThetaBal').textContent = c.thetaBalDeg.toFixed(1);
-  const be = document.getElementById('dBal');
-  be.textContent = c.balance;
-  be.className = 'pv ' + (c.balance==='BALANCED'?'grn':'red');
+  // ── Update HUD (all values from GPU) ──
+  const g = window.gpuState || {};
+  const el = id => document.getElementById(id);
+  if (g.collision_mode !== undefined) el('dMode').textContent = g.collision_mode.toUpperCase();
+  if (g.hollow_radius_mm !== undefined) el('dHollow').textContent = g.hollow_radius_mm.toFixed(1);
+  el('dSpeed').textContent = c.speed.toFixed(3);
+  el('dVa').textContent = c.v_along.toFixed(3);
+  el('dVp').textContent = c.v_across.toFixed(3);
+  el('dFg').textContent = c.Fg.toFixed(1);
+  el('dFlat').textContent = c.f_lateral.toFixed(0);
+  el('dFalong').textContent = c.f_along.toFixed(0);
+  el('dDepth').textContent = (c.penDepth * 1000).toFixed(2);
+  el('dTheta').textContent = (g.theta_actual !== undefined ? g.theta_actual : c.thetaDeg).toFixed(1);
+  if (g.alpha !== undefined) el('dAlphaGPU').textContent = g.alpha.toFixed(1);
+  el('dZone').textContent = c.zone_name;
+  el('dR').textContent = isFinite(c.R_turn) ? c.R_turn.toFixed(2) : '\u221E';
+  el('dThetaBal').textContent = c.thetaBalDeg.toFixed(1);
+  el('dL').textContent = c.L.toFixed(2);
+  if (g.frame !== undefined) el('dFrame').textContent = g.frame;
+  if (g.n_ice !== undefined) el('dParts').textContent = g.n_ice;
 }
 
 // ═══════════════════════════════════════════════════
@@ -931,7 +829,7 @@ window.addEventListener('resize',()=>{
 // ═══════════════════════════════════════════════════
 let ws = null;
 let wsConnected = false;
-let gpuState = null;
+window.gpuState = null;
 
 function wsSend(obj) {
   if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
@@ -953,7 +851,7 @@ function connectWS() {
   ws.onmessage = (e) => {
     const s = JSON.parse(e.data);
     if (s.type === 'state') {
-      gpuState = s;
+      window.gpuState = s;
       updateGPUHud(s);
     }
   };
@@ -1027,25 +925,8 @@ paramBindings.forEach(([sid, nid, key]) => {
 }
 
 function updateGPUHud(s) {
-  const el = id => document.getElementById(id);
-  if (s.collision_mode !== undefined) el('dMode').textContent = s.collision_mode.toUpperCase();
-  if (s.hollow_radius_mm !== undefined) el('dHollow').textContent = s.hollow_radius_mm.toFixed(1);
-  if (s.speed !== undefined) el('dSpeed').textContent = s.speed.toFixed(3);
-  if (s.va !== undefined) el('dVa').textContent = s.va.toFixed(3);
-  if (s.vp !== undefined) el('dVp').textContent = s.vp.toFixed(3);
-  if (s.f_lateral !== undefined) el('dFlat').textContent = s.f_lateral.toFixed(0);
-  if (s.f_along !== undefined) el('dFalong').textContent = s.f_along.toFixed(0);
-  if (s.pen !== undefined) el('dPenGPU').textContent = s.pen.toFixed(2);
-  if (s.frame !== undefined) el('dFrame').textContent = s.frame;
-  if (s.n_ice !== undefined) el('dParts').textContent = s.n_ice;
-
-  // Update analytical values from GPU where applicable
-  if (s.mu_p !== undefined) el('dRalong').textContent = Math.abs(s.mu_a || 0).toFixed(1);
-  if (s.mu_p !== undefined) el('dRacross').textContent = Math.abs(s.mu_p || 0).toFixed(0);
-
-  // Update balance info from GPU state
-  if (s.theta_balance !== undefined) el('dThetaBal').textContent = s.theta_balance.toFixed(1);
-  if (s.theta_actual !== undefined) el('dTheta').textContent = s.theta_actual.toFixed(1);
+  // GPU state stored globally, updateScene reads it
+  updateScene();
 }
 
 // Start connection
