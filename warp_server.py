@@ -4,13 +4,15 @@ Ice particles form a groove around the blade — friction emerges from geometry.
 No friction coefficients — the blade physically pushes through ice particles.
 
 Architecture:
-  - Warp GPU kernel: ice particles + rigid blade collision
+  - Warp GPU kernel: ice particles + rigid mesh collision (real CAD geometry)
   - aiohttp WebSocket server: browser ↔ physics
   - Blade is kinematic (position-controlled) with velocity from forces
+  - Blade CAD loaded from STL, collision via wp.Mesh BVH queries
 """
 import asyncio
 import json
 import math
+import os
 import time
 import numpy as np
 import aiohttp
@@ -19,6 +21,11 @@ from aiohttp import web
 import warp as wp
 wp.init()
 wp.set_device("cuda:0")
+
+# ─── Mesh constants ───
+HOLLOW_RADIUS_DEFAULT = 0.015875  # 5/8" = 15.875mm in meters
+STL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "blade-holder-cad.stl")
+USE_MESH_COLLISION = True  # set False to fall back to box collision
 
 # ─── Physics constants ───
 SCALE = 50  # Scale factor for particle resolution
@@ -140,6 +147,229 @@ def recenter_ice(
         pos[i] = wp.vec3(new_x, new_y, new_z)
         vel[i] = wp.vec3(0.0, 0.0, 0.0)
     
+
+def load_blade_mesh(stl_path, scale, hollow_radius=HOLLOW_RADIUS_DEFAULT):
+    """Load blade STL, transform to simulation local frame, create wp.Mesh.
+    
+    STL coordinate system:
+      X = blade length (±0.14m), Y = height (0=bottom edge, 0.079=top), Z = thickness (±0.0065m)
+    
+    Simulation blade-local frame:
+      X = along blade (length), Y = across blade (thickness), Z = height
+    
+    Transform: sim_x = stl_x * scale, sim_y = stl_z * scale, sim_z = (stl_y - blade_center_y) * scale
+    The blade center is at stl_y = BLADE_H_REAL/2 = 0.015m
+    """
+    import trimesh
+    
+    mesh = trimesh.load(stl_path)
+    verts = mesh.vertices.copy()  # (N, 3) in STL coords
+    faces = mesh.faces.copy()     # (M, 3) triangle indices
+    
+    print(f"[mesh] Loaded STL: {verts.shape[0]} vertices, {faces.shape[0]} triangles")
+    print(f"[mesh] STL bounds: X=[{verts[:,0].min():.4f}, {verts[:,0].max():.4f}], "
+          f"Y=[{verts[:,1].min():.4f}, {verts[:,1].max():.4f}], "
+          f"Z=[{verts[:,2].min():.4f}, {verts[:,2].max():.4f}]")
+    
+    # Optional: adjust hollow radius by modifying bottom vertices
+    if abs(hollow_radius - HOLLOW_RADIUS_DEFAULT) > 1e-6:
+        R_new = hollow_radius
+        half_t = 0.0015  # half thickness at cutting edge
+        bottom_mask = verts[:, 1] < 0.003  # bottom 3mm is blade edge
+        for i in range(len(verts)):
+            if bottom_mask[i]:
+                z = verts[i, 2]  # thickness position
+                if abs(z) < half_t:
+                    # Recalculate Y using new hollow radius
+                    y_new = math.sqrt(R_new**2 - z**2) - math.sqrt(R_new**2 - half_t**2)
+                    verts[i, 1] = max(0.0, y_new)
+        print(f"[mesh] Adjusted hollow radius to {hollow_radius*1000:.2f}mm")
+    
+    # Transform: STL (X, Y, Z) → blade-local (X, Y, Z)
+    # sim_x = stl_x (along blade)
+    # sim_y = stl_z (across blade / thickness)  
+    # sim_z = stl_y - blade_center (height, centered on blade)
+    blade_center_y = BLADE_H_REAL / 2.0  # 0.015m
+    
+    transformed = np.zeros_like(verts)
+    transformed[:, 0] = verts[:, 0] * scale           # along blade
+    transformed[:, 1] = verts[:, 2] * scale            # across blade (thickness)
+    transformed[:, 2] = (verts[:, 1] - blade_center_y) * scale  # height (centered)
+    
+    print(f"[mesh] Transformed bounds: X=[{transformed[:,0].min():.2f}, {transformed[:,0].max():.2f}], "
+          f"Y=[{transformed[:,1].min():.2f}, {transformed[:,1].max():.2f}], "
+          f"Z=[{transformed[:,2].min():.2f}, {transformed[:,2].max():.2f}]")
+    
+    # Fix normals for consistent winding
+    trimesh.repair.fix_normals(mesh)
+    trimesh.repair.fix_winding(mesh)
+    
+    # Create Warp mesh on GPU
+    wp_points = wp.array(transformed.astype(np.float32), dtype=wp.vec3, device="cuda:0")
+    wp_indices = wp.array(faces.flatten().astype(np.int32), dtype=wp.int32, device="cuda:0")
+    
+    wp_mesh = wp.Mesh(
+        points=wp_points,
+        indices=wp_indices,
+        support_winding_number=True,
+    )
+    
+    print(f"[mesh] wp.Mesh created on GPU (id={wp_mesh.id}, support_winding_number=True)")
+    
+    # Store raw data for debug visualization
+    mesh_data = {
+        'vertices': transformed.tolist(),
+        'faces': faces.tolist(),
+        'n_verts': int(verts.shape[0]),
+        'n_faces': int(faces.shape[0]),
+        'hollow_radius': hollow_radius,
+    }
+    
+    return wp_mesh, mesh_data
+
+
+@wp.kernel
+def physics_step_mesh(
+    pos: wp.array(dtype=wp.vec3),
+    vel: wp.array(dtype=wp.vec3),
+    blade_cx: float,
+    blade_cy: float,
+    blade_cz: float,
+    blade_half_l: float,
+    blade_half_w: float,
+    blade_half_h: float,
+    blade_yaw: float,
+    blade_lean: float,
+    mesh_id: wp.uint64,
+    blade_fx_out: wp.array(dtype=wp.vec3),
+    n: int,
+    dt: float,
+    stiffness: float,
+    damping: float,
+    particle_r: float,
+):
+    """Physics step with real CAD mesh collision.
+    
+    Strategy: transform particle to blade local frame, query wp.Mesh for
+    signed distance using winding number, push out with anisotropic stiffness.
+    Box pre-filter for performance (skip mesh query for distant particles).
+    """
+    i = wp.tid()
+    if i >= n:
+        return
+
+    p = pos[i]
+    v = vel[i]
+
+    force = wp.vec3(0.0, 0.0, -G * ICE_RHO)
+
+    # Ground plane
+    if p[2] < particle_r:
+        pen = particle_r - p[2]
+        force = force + wp.vec3(0.0, 0.0, pen * stiffness)
+        vt = wp.vec3(v[0], v[1], 0.0)
+        sp = wp.length(vt)
+        if sp > 1.0e-5:
+            fn = pen * stiffness
+            ff = wp.min(fn * 0.3, sp * damping)
+            force = force - wp.normalize(vt) * ff
+
+    # Transform particle into blade local frame
+    cos_y = wp.cos(blade_yaw)
+    sin_y = wp.sin(blade_yaw)
+    cos_l = wp.cos(blade_lean)
+    sin_l = wp.sin(blade_lean)
+
+    dx = p[0] - blade_cx
+    dy = p[1] - blade_cy
+    dz = p[2] - blade_cz
+
+    # Rotate by -yaw around Z
+    lx = dx * cos_y + dy * sin_y
+    ly = -dx * sin_y + dy * cos_y
+    # Rotate by -lean around X
+    lz = ly * sin_l + dz * cos_l
+    ly2 = ly * cos_l - dz * sin_l
+
+    # Box pre-filter with expanded margin (2x particle radius)
+    margin = particle_r * 3.0
+    sx = blade_half_l + margin
+    sy = blade_half_w + margin
+    sz = blade_half_h + margin
+
+    if wp.abs(lx) < sx and wp.abs(ly2) < sy and wp.abs(lz) < sz:
+        # Mesh query: find closest point and signed distance
+        query_point = wp.vec3(lx, ly2, lz)
+        max_query_dist = margin
+        
+        query = wp.mesh_query_point_sign_winding_number(mesh_id, query_point, max_query_dist)
+        
+        if query.result:
+            closest = wp.mesh_eval_position(mesh_id, query.face, query.u, query.v)
+            delta = query_point - closest
+            dist = wp.length(delta)
+            sign = query.sign  # -1 = inside, +1 = outside
+            
+            # Signed distance: negative = inside mesh
+            signed_dist = dist * sign
+            
+            if signed_dist < particle_r:
+                # Particle overlaps or is inside mesh — push out
+                pen = particle_r - signed_dist
+                
+                # Cap penetration to avoid explosive forces
+                max_pen = particle_r * 3.0
+                pen = wp.min(pen, max_pen)
+                
+                # Push-out direction: from closest point toward particle
+                if dist > 1.0e-6:
+                    normal = wp.normalize(delta) * sign
+                else:
+                    normal = wp.vec3(0.0, 0.0, 1.0)
+                
+                # ANISOTROPIC stiffness based on surface normal direction
+                # Normal components tell us which face type we're hitting:
+                #   nx large → end face (along blade) → low stiffness
+                #   ny large → side face (lateral / groove wall) → high stiffness
+                #   nz large → top/bottom face (vertical) → high stiffness
+                nx = wp.abs(normal[0])
+                ny = wp.abs(normal[1])
+                nz = wp.abs(normal[2])
+                
+                k_along = stiffness * 0.002
+                k_lateral = stiffness
+                k_vertical = stiffness
+                
+                # Weighted stiffness by axis contribution
+                total_n = nx + ny + nz + 1.0e-8
+                k_eff = (nx * k_along + ny * k_lateral + nz * k_vertical) / total_n
+                
+                local_force = normal * pen * k_eff
+                
+                # Rotate force back to world frame
+                # Undo lean (rotate around X by +lean)
+                fy_world_local = local_force[1] * cos_l + local_force[2] * sin_l
+                fz_world_local = -local_force[1] * sin_l + local_force[2] * cos_l
+                # Undo yaw (rotate around Z by +yaw)
+                fx_world = local_force[0] * cos_y - fy_world_local * sin_y
+                fy_world = local_force[0] * sin_y + fy_world_local * cos_y
+                fz_world = fz_world_local
+
+                world_force = wp.vec3(fx_world, fy_world, fz_world)
+                force = force + world_force
+
+                # Reaction on blade (Newton's 3rd law)
+                wp.atomic_add(blade_fx_out, 0, -world_force)
+
+    # Damping
+    force = force - v * damping
+
+    # Update
+    v_new = v + force * dt / ICE_RHO
+    p_new = p + v_new * dt
+    vel[i] = v_new
+    pos[i] = p_new
+
 
 @wp.kernel
 def physics_step(
@@ -291,6 +521,25 @@ class BladePhysics:
         self.ice_vel = wp.zeros(N_ICE, dtype=wp.vec3, device="cuda:0")
         self.blade_force = wp.zeros(1, dtype=wp.vec3, device="cuda:0")
 
+        # Load blade mesh for CAD collision
+        self.blade_mesh = None
+        self.mesh_data = None
+        self.hollow_radius = HOLLOW_RADIUS_DEFAULT
+        if USE_MESH_COLLISION and os.path.exists(STL_PATH):
+            try:
+                self.blade_mesh, self.mesh_data = load_blade_mesh(
+                    STL_PATH, SCALE, self.hollow_radius
+                )
+                print(f"[physics] Mesh collision ENABLED (hollow={self.hollow_radius*1000:.2f}mm)")
+            except Exception as e:
+                print(f"[physics] Mesh load failed, falling back to box: {e}")
+                self.blade_mesh = None
+        else:
+            if USE_MESH_COLLISION:
+                print(f"[physics] STL not found at {STL_PATH}, falling back to box collision")
+            else:
+                print(f"[physics] Mesh collision disabled, using box")
+
         # Blade direction = yaw + alpha (physical blade orientation in world)
         # yaw = travel/heading direction (updated by arc turning)
         # alpha = offset angle (foot opening)
@@ -342,16 +591,32 @@ class BladePhysics:
 
         # Blade physical orientation in particles = yaw + alpha
         blade_dir = self.yaw + self.alpha
-        wp.launch(physics_step, dim=N_ICE,
-                  inputs=[
-                      self.ice_pos, self.ice_vel,
-                      float(self.pos[0]), float(self.pos[1]), float(self.pos[2]),
-                      half_l, half_w, half_h,
-                      float(blade_dir), float(self.lean),
-                      self.blade_force,
-                      N_ICE, DT, STIFFNESS, DAMPING, PARTICLE_R,
-                  ],
-                  device="cuda:0")
+        
+        if self.blade_mesh is not None:
+            # Use real CAD mesh collision
+            wp.launch(physics_step_mesh, dim=N_ICE,
+                      inputs=[
+                          self.ice_pos, self.ice_vel,
+                          float(self.pos[0]), float(self.pos[1]), float(self.pos[2]),
+                          half_l, half_w, half_h,
+                          float(blade_dir), float(self.lean),
+                          self.blade_mesh.id,
+                          self.blade_force,
+                          N_ICE, DT, STIFFNESS, DAMPING, PARTICLE_R,
+                      ],
+                      device="cuda:0")
+        else:
+            # Fallback to box collision
+            wp.launch(physics_step, dim=N_ICE,
+                      inputs=[
+                          self.ice_pos, self.ice_vel,
+                          float(self.pos[0]), float(self.pos[1]), float(self.pos[2]),
+                          half_l, half_w, half_h,
+                          float(blade_dir), float(self.lean),
+                          self.blade_force,
+                          N_ICE, DT, STIFFNESS, DAMPING, PARTICLE_R,
+                      ],
+                      device="cuda:0")
         wp.synchronize()
 
     def step(self):
@@ -598,6 +863,8 @@ class BladePhysics:
             'alpha': round(math.degrees(self.alpha), 2),  # foot opening angle (deg)
             'frame': self.frame,
             'engine': 'warp-gpu-groove',
+            'collision_mode': 'mesh' if self.blade_mesh is not None else 'box',
+            'hollow_radius_mm': round(self.hollow_radius * 1000, 2),
             'f_along': round(f_along_disp, 1),
             'f_lateral': round(f_perp_disp, 1),
             'n_ice': N_ICE,
@@ -678,6 +945,36 @@ class BladePhysics:
                 self.force_accum_along = 0.0
                 self.force_accum_perp = 0.0
             print(f'[cmd] Ice hardness={hardness} MPa, stiffness={STIFFNESS:.0f}')
+        elif t == 'hollow_radius':
+            # Adjust hollow grind radius (mm input → meters)
+            radius_mm = max(5.0, min(50.0, cmd.get('value', 15.875)))
+            radius_m = radius_mm / 1000.0
+            if abs(radius_m - self.hollow_radius) > 1e-6 and os.path.exists(STL_PATH):
+                self.hollow_radius = radius_m
+                try:
+                    self.blade_mesh, self.mesh_data = load_blade_mesh(
+                        STL_PATH, SCALE, self.hollow_radius
+                    )
+                    # Re-settle ice with new mesh
+                    self.vel = np.array([0.0, 0.0, 0.0])
+                    for _ in range(500):
+                        self._step_particles()
+                    self.vel = np.array([0.0, 0.0, 0.0])
+                    self.blade_force.zero_()
+                    self.force_accum_along = 0.0
+                    self.force_accum_perp = 0.0
+                    print(f'[cmd] Hollow radius={radius_mm:.1f}mm')
+                except Exception as e:
+                    print(f'[cmd] Hollow radius change failed: {e}')
+        elif t == 'toggle_mesh':
+            # Toggle between mesh and box collision for comparison
+            if self.blade_mesh is not None:
+                self._saved_mesh = self.blade_mesh
+                self.blade_mesh = None
+                print('[cmd] Switched to BOX collision')
+            elif hasattr(self, '_saved_mesh') and self._saved_mesh is not None:
+                self.blade_mesh = self._saved_mesh
+                print('[cmd] Switched to MESH collision')
         elif t == 'yaw':
             self.yaw = cmd.get('value', 0) * math.pi / 180
         elif t == 'reset':
@@ -787,6 +1084,48 @@ async def dashboard_handler(request):
     return web.FileResponse('./dashboard.html')
 
 
+async def sandbox_handler(request):
+    return web.FileResponse('./sandbox.html')
+
+
+async def debug_mesh_handler(request):
+    """Debug visualization endpoint: returns mesh + nearby particle data as JSON."""
+    if physics is None:
+        return web.json_response({'error': 'Physics not initialized'}, status=503)
+    
+    # Get particles near blade (within 2x blade extents)
+    ice_np = physics.ice_pos.numpy()
+    cx, cy, cz = physics.pos[0], physics.pos[1], physics.pos[2]
+    half_l = BLADE_LEN / 2.0
+    half_w = BLADE_W * 6.0  # wider to see groove
+    
+    # Filter particles near blade
+    mask = (
+        (np.abs(ice_np[:, 0] - cx) < half_l * 1.5) &
+        (np.abs(ice_np[:, 1] - cy) < half_w) &
+        (ice_np[:, 2] < BLADE_H * 1.5)
+    )
+    near_particles = ice_np[mask]
+    
+    response = {
+        'blade_pos': [float(cx), float(cy), float(cz)],
+        'blade_yaw': float(physics.yaw + physics.alpha),
+        'blade_lean': float(physics.lean),
+        'collision_mode': 'mesh' if physics.blade_mesh is not None else 'box',
+        'hollow_radius_mm': round(physics.hollow_radius * 1000, 2),
+        'n_particles_near': int(mask.sum()),
+        'n_particles_total': N_ICE,
+        'particles': near_particles.tolist(),
+        'scale': SCALE,
+    }
+    
+    # Add mesh data if available
+    if physics.mesh_data is not None:
+        response['mesh'] = physics.mesh_data
+    
+    return web.json_response(response)
+
+
 async def start_background_tasks(app):
     app['physics_task'] = asyncio.ensure_future(physics_loop())
 
@@ -800,6 +1139,8 @@ if __name__ == '__main__':
     app.router.add_get('/', index_handler)
     app.router.add_get('/test', test_handler)
     app.router.add_get('/dashboard', dashboard_handler)
+    app.router.add_get('/sandbox', sandbox_handler)
+    app.router.add_get('/debug_mesh', debug_mesh_handler)
     app.router.add_get('/ws', ws_handler)
     app.on_startup.append(start_background_tasks)
     app.on_cleanup.append(cleanup_background_tasks)
