@@ -142,6 +142,8 @@ button.active{background:#0074D9;color:#fff;border-color:#0074D9}
   <div class="pr"><span class="pl">Contact length (STL)</span><span><span class="pv cyn" id="dCLen">---</span><span class="pu">mm</span></span></div>
   <div class="pr"><span class="pl">Contact width (STL)</span><span><span class="pv cyn" id="dCWid">---</span><span class="pu">mm</span></span></div>
   <div class="pr"><span class="pl">Contact area (STL)</span><span><span class="pv cyn" id="dCArea">---</span><span class="pu">mm&sup2;</span></span></div>
+  <div class="pr"><span class="pl">Pen. analytical</span><span><span class="pv pur" id="dPenAna">---</span><span class="pu">mm</span></span></div>
+  <div class="pr" style="font-size:8px;color:#4a6a8a"><span class="pl" style="font-size:8px">H&times;L<sub>c</sub>(d)&times;w(d)=F<sub>n</sub></span><span class="pv" id="dPenFormula" style="font-size:8px;color:#4a6a8a">---</span></div>
   <hr style="border-color:#1e2d42;margin:3px 0">
   <div class="pr"><span class="pl">Lean (actual)</span><span><span class="pv ylw" id="dTheta">---</span><span class="pu">&deg;</span></span></div>
   <div class="pr"><span class="pl">&alpha; (foot opening)</span><span><span class="pv" id="dAlphaGPU">---</span><span class="pu">&deg;</span></span></div>
@@ -753,6 +755,15 @@ function updateScene() {
   if (g.contact_length_mm !== undefined) el('dCLen').textContent = g.contact_length_mm.toFixed(1);
   if (g.contact_width_mm !== undefined) el('dCWid').textContent = g.contact_width_mm.toFixed(2);
   if (g.contact_area_geom_mm2 !== undefined) el('dCArea').textContent = g.contact_area_geom_mm2.toFixed(1);
+  if (g.pen_analytical_mm !== undefined) el('dPenAna').textContent = g.pen_analytical_mm.toFixed(3);
+  if (g.pen_analytical_mm !== undefined && g.ice_hardness_mpa !== undefined) {
+    const Fn = (S.mass * 9.81 * Math.cos(S.lean * Math.PI / 180)).toFixed(0);
+    const H = g.ice_hardness_mpa;
+    const Lc = (g.contact_length_mm || 0).toFixed(1);
+    const w = (g.contact_width_mm || 0).toFixed(2);
+    const resist = (H * 1e6 * (g.contact_length_mm||1)/1000 * (g.contact_width_mm||0.1)/1000).toFixed(0);
+    el('dPenFormula').textContent = H+'MPa×'+Lc+'mm×'+w+'mm='+resist+'N vs F='+Fn+'N';
+  }
   el('dTheta').textContent = (g.theta_actual !== undefined ? g.theta_actual : c.thetaDeg).toFixed(1);
   if (g.alpha !== undefined) el('dAlphaGPU').textContent = g.alpha.toFixed(1);
   el('dZone').textContent = c.zone_name;
