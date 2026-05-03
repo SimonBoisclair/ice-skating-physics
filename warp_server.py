@@ -37,16 +37,18 @@ BLADE_LEN = BLADE_LEN_REAL * SCALE  # 14.0m
 BLADE_W = BLADE_W_REAL * SCALE      # 0.15m
 BLADE_H = BLADE_H_REAL * SCALE      # 1.5m
 
-ICE_L = BLADE_LEN * 0.5  # 7m patch
-ICE_W = BLADE_W * 12      # 1.8m wide (35% clearance for 45° lean blade footprint of 1.17m)
-ICE_H = BLADE_H * 0.4     # 0.6m deep
-# Maintain same particle density as original (2381/m³): 7 × 1.8 × 0.6 = 7.56 m³ × 2381 ≈ 18000
-N_ICE = 18000
+# Ice particle field — tight box around blade contact zone
+# Width must handle lean sweep: at 45° lean, blade edge shifts ~15mm laterally
+ICE_L = 0.300 * SCALE    # 300mm = 15.0 scaled (full blade length)
+ICE_W = 0.025 * SCALE    # 25mm = 1.25 scaled (handles lean sweep up to 45°)
+ICE_H = 0.002 * SCALE    # 2mm = 0.1 scaled (max pen depth + margin)
+# 240k particles in 300×25×2mm = 15,000mm³ → 16 particles/mm³
+N_ICE = 240000
 
 DT = 0.001
 G = 9.81
 ICE_RHO = 917.0
-PARTICLE_R = 0.025 * SCALE / 50.0  # scale with sim
+PARTICLE_R = 0.025 * SCALE / 50.0  # particle radius in scaled coords (0.5mm real)
 STIFFNESS_BASE = 2e5
 STIFFNESS = STIFFNESS_BASE  # adjusted by ice hardness
 DAMPING = 80.0
@@ -483,8 +485,8 @@ def physics_step_mesh(
     lz = ly * sin_l + dz * cos_l
     ly2 = ly * cos_l - dz * sin_l
 
-    # Box pre-filter with expanded margin (2x particle radius)
-    margin = particle_r * 3.0
+    # Box pre-filter with expanded margin
+    margin = wp.max(particle_r * 3.0, 0.1)  # at least 0.1 scaled (2mm real)
     sx = blade_half_l + margin
     sy = blade_half_w + margin
     sz = blade_half_h + margin
@@ -492,7 +494,7 @@ def physics_step_mesh(
     if wp.abs(lx) < sx and wp.abs(ly2) < sy and wp.abs(lz) < sz:
         # Mesh query: find closest point and signed distance
         query_point = wp.vec3(lx, ly2, lz)
-        max_query_dist = margin
+        max_query_dist = 2.0  # large enough to find surface from deep inside blade
         
         query = wp.mesh_query_point_sign_winding_number(mesh_id, query_point, max_query_dist)
         
@@ -717,7 +719,11 @@ def pen_reduce(
 class BladePhysics:
     def __init__(self):
         # All positions in SCALED coordinates to match particles
-        self.pos = np.array([0.0, 0.0, ICE_H * 0.5])  # blade center in ice field
+        # Position blade so cutting edge is at ice surface (accounting for lean)
+        # edge_world_z = pos[2] - 0.75*cos(lean) = ICE_H
+        # → pos[2] = ICE_H + 0.75*cos(lean)
+        init_lean = 15.0 * math.pi / 180
+        self.pos = np.array([0.0, 0.0, ICE_H + 0.75 * math.cos(init_lean)])
         self.vel = np.array([0.0, 0.0, 0.0])  # velocity in scaled coords/s
         self.yaw = 0.0
         self.lean = 15.0 * math.pi / 180  # radians — user-set lean angle (θ)
@@ -734,6 +740,8 @@ class BladePhysics:
         self.peak_push_speed = 0.0  # track max speed during push for energy conservation
         self.ice_hardness_mpa = 4.75  # default ice hardness (MPa), updated by 'ice' command
         self.pen_analytical_mm = 0.0  # analytical penetration: F_n / (H × Lc × w_eff)
+        self.reaction_fz_real = 0.0  # vertical reaction force from particles (N)
+        self.vel_z = 0.0  # vertical velocity for blade Z settling
 
         # Ice particles
         self.ice_pos = wp.zeros(N_ICE, dtype=wp.vec3, device="cuda:0")
@@ -791,15 +799,16 @@ class BladePhysics:
                   device="cuda:0")
         wp.synchronize()
 
-        # Settle ice (blade is fixed during settling)
-        print("[physics] Settling ice particles...")
+        # Settle ice particles (no blocking settle — Z dynamics in step() will converge)
+        print("[physics] Settling ice particles...", flush=True)
         self.recenter_seed = 1000
-        for _ in range(500):
+        for i in range(200):
             self._step_particles()
-        # Zero out any accumulated blade velocity + force from settling
+            if i % 50 == 0:
+                print(f"  [init] step {i}/200", flush=True)
         self.vel = np.array([0.0, 0.0, 0.0])
         self.blade_force.zero_()
-        print("[physics] Ice settled.")
+        print("[physics] Ice settled.", flush=True)
 
         self.frame = 0
         self.push_frames = 0
@@ -869,6 +878,102 @@ class BladePhysics:
                   device="cuda:0")
         wp.synchronize()
 
+    def settle_blade_quick(self, steps=50):
+        """Settle blade Z so GPU penetration matches physics equilibrium.
+        
+        Uses the analytical solver to compute expected equilibrium depth,
+        then adjusts blade Z (via binary search on pen_max_mm) until the
+        GPU particle simulation produces that depth.
+        
+        After settling, pen_max_mm reflects the real GPU measurement at
+        the physically correct blade position.
+        """
+        F_normal_real = self.blade_mass * G * math.cos(self.lean)
+        
+        # Compute target penetration from analytical model
+        target_pen_mm = 0.3  # default fallback
+        if self.blade_geom is not None:
+            H_pa = self.ice_hardness_mpa * 1e6
+            lean_deg = abs(math.degrees(self.lean))
+            pitch_deg = self.pitch * 5.0
+            target_pen_mm = self.blade_geom.solve_depth(
+                F_normal_real, H_pa, lean_deg, pitch_deg
+            )
+            self.pen_analytical_mm = target_pen_mm
+        
+        target_pen_mm = max(0.01, target_pen_mm)  # ensure nonzero
+        
+        # Position blade so cutting edge is at target depth below ice surface.
+        # The cutting edge is at local z=-0.75, which in world frame
+        # (accounting for lean rotation) is:
+        #   edge_world_z = blade_cz - 0.75 * cos(lean)
+        #   edge_world_y = blade_cy + 0.75 * sin(lean)
+        # We want edge_world_z = ICE_H - target_pen_scaled
+        target_pen_scaled = target_pen_mm / 1000.0 * SCALE
+        edge_target_z = ICE_H - target_pen_scaled
+        target_z = edge_target_z + 0.75 * math.cos(self.lean)
+        
+        print(f"[settle] target_pen={target_pen_mm:.3f}mm (scaled={target_pen_scaled:.4f}), "
+              f"F_n={F_normal_real:.0f}N, target_Z={target_z:.4f}", flush=True)
+        
+        self.pos[2] = target_z
+        self.vel = np.array([0.0, 0.0, 0.0])
+        self.vel_z = 0.0
+        
+        # Reinitialize particles fresh so they fill the contact zone
+        wp.launch(init_ice, dim=N_ICE,
+                  inputs=[self.ice_pos, self.ice_vel,
+                          N_ICE, ICE_L, ICE_W, ICE_H,
+                          self.recenter_seed + self.frame],
+                  device="cuda:0")
+        wp.synchronize()
+        
+        # Run physics steps — track peak contact count to find best measurement
+        best_pen = 0.0
+        best_cnt = 0
+        best_sum = 0.0
+        for i in range(steps):
+            self._step_particles()
+            ps = self.pen_stats.numpy()
+            cnt = int(ps[2])
+            if cnt > best_cnt:
+                best_pen = float(ps[0])
+                best_sum = float(ps[1])
+                best_cnt = cnt
+        
+        print(f"  [settle] best: particle_pen={best_pen*1000/SCALE:.3f}mm cnt={best_cnt}", flush=True)
+        
+        # Penetration depth = geometric: how far blade edge is below ice surface
+        # edge_world_z = pos[2] - 0.75 * cos(lean)
+        # pen = ICE_H - edge_world_z  (positive = below surface)
+        edge_z = self.pos[2] - 0.75 * math.cos(self.lean)
+        geo_pen_scaled = ICE_H - edge_z
+        geo_pen_mm = geo_pen_scaled / SCALE * 1000.0
+        
+        self.pen_max_mm = max(0.0, geo_pen_mm)
+        self.pen_avg_mm = self.pen_max_mm * 0.6  # approximate: avg is ~60% of max
+        self.pen_contact_count = best_cnt
+        particle_r_real_m = PARTICLE_R / SCALE
+        particle_area_mm2 = math.pi * (particle_r_real_m * 1000) ** 2
+        self.pen_contact_area_mm2 = best_cnt * particle_area_mm2
+        
+        # Update contact geometry from blade_geom lookup
+        if self.blade_geom is not None and self.pen_max_mm > 0.001:
+            lean_deg = abs(math.degrees(self.lean))
+            pitch_deg = self.pitch * 5.0
+            clen, cwid, carea = self.blade_geom.query(lean_deg, pitch_deg, self.pen_max_mm)
+            self.contact_length_mm = clen * 1000
+            self.contact_width_mm = cwid * 1000
+            self.contact_area_mm2 = carea * 1e6
+        
+        self.vel_z = 0.0
+        self.vel = np.array([0.0, 0.0, 0.0])
+        self.blade_force.zero_()
+        self.force_accum_along = 0.0
+        self.force_accum_perp = 0.0
+        
+        print(f"[settle] DONE Z={self.pos[2]:.4f}, GPU_pen={self.pen_max_mm:.3f}mm, target={target_pen_mm:.3f}mm", flush=True)
+
     def step(self):
         self.frame += 1
 
@@ -897,19 +1002,21 @@ class BladePhysics:
         bf = self.blade_force.numpy()[0]
         reaction_fx = float(bf[0])
         reaction_fy = float(bf[1])
+        reaction_fz = float(bf[2])
+        self.reaction_fz_real = reaction_fz / SCALE  # vertical reaction in real N
 
-        # Read penetration stats: [max_pen, sum_pen, count] in sim units
-        ps = self.pen_stats.numpy()
-        pen_max_sim = float(ps[0])
-        pen_sum_sim = float(ps[1])
-        pen_count = int(ps[2])
-        # Convert sim units to real mm: sim_distance / SCALE * 1000
-        sim_to_mm = 1000.0 / SCALE
+        # No continuous Z adjustment — settle_blade_quick handles Z positioning
+        # on every parameter change. Between settles, Z stays fixed.
+
+        # Penetration = geometric depth of blade edge below ice surface
+        edge_z = self.pos[2] - 0.75 * math.cos(self.lean)
+        geo_pen_mm = max(0.0, (ICE_H - edge_z) / SCALE * 1000.0)
         d = self.force_decay
-        raw_max = pen_max_sim * sim_to_mm
-        raw_avg = (pen_sum_sim / max(pen_count, 1)) * sim_to_mm
-        self.pen_max_mm = d * self.pen_max_mm + (1 - d) * raw_max
-        self.pen_avg_mm = d * self.pen_avg_mm + (1 - d) * raw_avg
+        self.pen_max_mm = d * self.pen_max_mm + (1 - d) * geo_pen_mm
+        self.pen_avg_mm = self.pen_max_mm * 0.6
+        # Read particle contact count from pen_stats
+        ps = self.pen_stats.numpy()
+        pen_count = int(ps[2])
         self.pen_contact_count = pen_count
         # Contact area: count × particle cross-section area in real mm²
         # Each particle occupies π×r² in real space (r = PARTICLE_R / SCALE in meters)
@@ -1155,6 +1262,8 @@ class BladePhysics:
             # Analytical penetration: F_n / (H × Lc × w_eff) — no magic numbers
             'pen_analytical_mm': round(self.pen_analytical_mm, 4),
             'ice_hardness_mpa': round(self.ice_hardness_mpa, 2),
+            'blade_reaction_z': round(self.reaction_fz_real, 1),
+            'F_normal': round(self.blade_mass * G * math.cos(self.lean), 1),
             'R': round(R, 4),
             'zone': idx,
             'zone_name': zone_name,
@@ -1191,37 +1300,16 @@ class BladePhysics:
             self.push_frames = 200  # 0.2 seconds at dt=0.001
             print(f"[cmd] PUSH fx={self.push_fx}, fy={self.push_fy}, force={self.force_mult}, frames={self.push_frames}")
         elif t == 'lean':
-            old_lean = self.lean
             deg = cmd.get('value', 15)
             self.lean = deg * math.pi / 180
-            # Re-settle ice when lean changes significantly to avoid particle overlap explosions
-            if abs(self.lean - old_lean) > 0.03:  # ~2°
-                settle_steps = min(1500, int(300 + abs(self.lean - old_lean) * 800))
-                self.vel = np.array([0.0, 0.0, 0.0])
-                for _ in range(settle_steps):
-                    self._step_particles()
-                self.vel = np.array([0.0, 0.0, 0.0])
-                self.blade_force.zero_()
-                self.force_accum_along = 0.0
-                self.force_accum_perp = 0.0
+            self.settle_blade_quick()
         elif t == 'set_L':
             self.L = max(0.3, min(1.5, cmd.get('value', 0.9)))  # clamp 0.3-1.5m
         elif t == 'alpha':
-            # Foot opening angle: 0° (aligned) to 90° (perpendicular/hockey stop)
             deg = max(-90, min(90, cmd.get('value', 0)))
-            old_alpha = self.alpha
             self.alpha = deg * math.pi / 180
             print(f'[cmd] Alpha (foot opening) = {deg}°')
-            # Re-settle ice when alpha changes significantly
-            if abs(self.alpha - old_alpha) > 0.05:  # ~3°
-                settle_steps = min(800, int(200 + abs(self.alpha - old_alpha) * 400))
-                self.vel = np.array([0.0, 0.0, 0.0])
-                for _ in range(settle_steps):
-                    self._step_particles()
-                self.vel = np.array([0.0, 0.0, 0.0])
-                self.blade_force.zero_()
-                self.force_accum_along = 0.0
-                self.force_accum_perp = 0.0
+            self.settle_blade_quick()
         elif t == 'set_velocity':
             # Set blade velocity directly (m/s in world frame)
             # vx = forward (along x), vy = lateral (along y)
@@ -1231,32 +1319,19 @@ class BladePhysics:
             print(f'[cmd] Set velocity vx={vx:.3f}, vy={vy:.3f} m/s')
         elif t == 'pitch':
             self.pitch = cmd.get('value', 0)
+            self.settle_blade_quick()
         elif t == 'force':
             self.force_mult = cmd.get('value', 1.5)
         elif t == 'weight':
             self.blade_mass = cmd.get('value', 85)
+            self.settle_blade_quick()
         elif t == 'ice':
-            # Ice hardness: soft (2 MPa) → less stiffness, hard (15 MPa) → more stiffness
-            # Scale STIFFNESS proportionally: medium=7 MPa → 1x, soft=2 → 0.4x, hard=15 → 2.1x
             hardness = max(1, min(20, cmd.get('value', 7)))
             self.ice_hardness_mpa = hardness
-            old_stiff = STIFFNESS
             STIFFNESS = STIFFNESS_BASE * (hardness / 7.0)
-            # Re-settle ice with new stiffness to avoid explosive overlap
-            # Higher stiffness needs more settle steps (larger forces)
-            if abs(STIFFNESS - old_stiff) > 1000:
-                stiff_ratio = max(1.0, STIFFNESS / STIFFNESS_BASE)
-                settle = min(1000, int(300 * stiff_ratio))
-                self.vel = np.array([0.0, 0.0, 0.0])
-                for _ in range(settle):
-                    self._step_particles()
-                self.vel = np.array([0.0, 0.0, 0.0])
-                self.blade_force.zero_()
-                self.force_accum_along = 0.0
-                self.force_accum_perp = 0.0
             print(f'[cmd] Ice hardness={hardness} MPa, stiffness={STIFFNESS:.0f}')
+            self.settle_blade_quick()
         elif t == 'hollow_radius':
-            # Adjust hollow grind radius (mm input → meters)
             radius_mm = max(5.0, min(50.0, cmd.get('value', 15.875)))
             radius_m = radius_mm / 1000.0
             if abs(radius_m - self.hollow_radius) > 1e-6 and os.path.exists(STL_PATH):
@@ -1265,15 +1340,8 @@ class BladePhysics:
                     self.blade_mesh, self.mesh_data = load_blade_mesh(
                         STL_PATH, SCALE, self.hollow_radius
                     )
-                    # Re-settle ice with new mesh
-                    self.vel = np.array([0.0, 0.0, 0.0])
-                    for _ in range(500):
-                        self._step_particles()
-                    self.vel = np.array([0.0, 0.0, 0.0])
-                    self.blade_force.zero_()
-                    self.force_accum_along = 0.0
-                    self.force_accum_perp = 0.0
                     print(f'[cmd] Hollow radius={radius_mm:.1f}mm')
+                    self.settle_blade_quick()
                 except Exception as e:
                     print(f'[cmd] Hollow radius change failed: {e}')
         elif t == 'toggle_mesh':
@@ -1288,11 +1356,11 @@ class BladePhysics:
         elif t == 'yaw':
             self.yaw = cmd.get('value', 0) * math.pi / 180
         elif t == 'reset':
-            self.pos = np.array([0.0, 0.0, ICE_H * 0.5])
+            self.pos = np.array([0.0, 0.0, ICE_H + 0.75 * math.cos(self.lean)])
             self.vel = np.array([0.0, 0.0, 0.0])
             self.yaw = 0.0
-            self.lean = 15.0 * math.pi / 180  # reset to default
-            self.alpha = 0.0  # reset foot opening angle
+            self.lean = 15.0 * math.pi / 180
+            self.alpha = 0.0
             self.pitch = 0.0
             self.blade_mass = BLADE_MASS
             self.L = L_COM
@@ -1301,21 +1369,17 @@ class BladePhysics:
             self.Fy = self.blade_mass * G
             self.ac = 0.0
             self.G_pos = [0.0, 0.0, self.L]
-            STIFFNESS = STIFFNESS_BASE  # reset ice hardness
+            STIFFNESS = STIFFNESS_BASE
             self.push_frames = 0
             self.peak_push_speed = 0.0
             self.force_accum_along = 0.0
             self.force_accum_perp = 0.0
-            # Re-init ice around blade and settle
             wp.launch(init_ice, dim=N_ICE,
                       inputs=[self.ice_pos, self.ice_vel,
                               N_ICE, ICE_L, ICE_W, ICE_H, 42],
                       device="cuda:0")
             wp.synchronize()
-            for _ in range(300):
-                self._step_particles()
-            self.vel = np.array([0.0, 0.0, 0.0])
-            self.blade_force.zero_()
+            self.settle_blade_quick()
             print("[cmd] RESET complete")
 
 

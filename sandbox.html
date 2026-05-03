@@ -144,6 +144,8 @@ button.active{background:#0074D9;color:#fff;border-color:#0074D9}
   <div class="pr"><span class="pl">Contact area (STL)</span><span><span class="pv cyn" id="dCArea">---</span><span class="pu">mm&sup2;</span></span></div>
   <div class="pr"><span class="pl">Pen. analytical</span><span><span class="pv pur" id="dPenAna">---</span><span class="pu">mm</span></span></div>
   <div class="pr" style="font-size:8px;color:#4a6a8a"><span class="pl" style="font-size:8px">H&times;L<sub>c</sub>(d)&times;w(d)=F<sub>n</sub></span><span class="pv" id="dPenFormula" style="font-size:8px;color:#4a6a8a">---</span></div>
+  <div class="pr"><span class="pl">F_reaction (z)</span><span><span class="pv" id="dReactZ">---</span><span class="pu">N</span></span></div>
+  <div class="pr"><span class="pl">F_normal (target)</span><span><span class="pv" id="dFnorm">---</span><span class="pu">N</span></span></div>
   <hr style="border-color:#1e2d42;margin:3px 0">
   <div class="pr"><span class="pl">Lean (actual)</span><span><span class="pv ylw" id="dTheta">---</span><span class="pu">&deg;</span></span></div>
   <div class="pr"><span class="pl">&alpha; (foot opening)</span><span><span class="pv" id="dAlphaGPU">---</span><span class="pu">&deg;</span></span></div>
@@ -763,6 +765,8 @@ function updateScene() {
     const resist = (H * 1e6 * (g.contact_length_mm||1)/1000 * (g.contact_width_mm||0.1)/1000).toFixed(0);
     el('dPenFormula').textContent = H+'MPa×'+Lc+'mm×'+w+'mm='+resist+'N vs F='+Fn+'N';
   }
+  if (g.blade_reaction_z !== undefined) el('dReactZ').textContent = g.blade_reaction_z.toFixed(1);
+  if (g.F_normal !== undefined) el('dFnorm').textContent = g.F_normal.toFixed(1);
   el('dTheta').textContent = (g.theta_actual !== undefined ? g.theta_actual : c.thetaDeg).toFixed(1);
   if (g.alpha !== undefined) el('dAlphaGPU').textContent = g.alpha.toFixed(1);
   el('dZone').textContent = c.zone_name;
