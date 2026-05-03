@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<title>Ice Skating Physics — Static Frame</title>
+<title>Ice Skating Physics — GPU Mesh Collision</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{background:#0f1923;color:#e0e8f0;font-family:'Segoe UI',system-ui,sans-serif;overflow:hidden}
@@ -60,7 +60,8 @@ button.active{background:#0074D9;color:#fff;border-color:#0074D9}
 
 <div id="panel">
 <h1>ICE SKATING PHYSICS</h1>
-<div class="sub">Static frame &mdash; no time evolution</div>
+<div class="sub">Connected to GPU mesh collision engine</div>
+<div id="wsStatus" style="background:#e74c3c;color:#fff;padding:3px 8px;border-radius:3px;font-size:10px;font-weight:bold;margin:4px 0">Disconnected</div>
 
 <!-- ═══ G: CENTER OF MASS ═══ -->
 <div class="sec">
@@ -170,9 +171,34 @@ button.active{background:#0074D9;color:#fff;border-color:#0074D9}
   <div class="hint">280mm blade &middot; 5/8" hollow</div>
 </div>
 
+<!-- ═══ GPU PHYSICS ═══ -->
+<div class="sec">
+  <div class="sec-t">GPU PHYSICS (from server)</div>
+  <div class="pr"><span class="pl">Collision mode</span><span class="pv blu" id="dMode">---</span></div>
+  <div class="pr"><span class="pl">Hollow radius</span><span><span class="pv" id="dHollow">---</span><span class="pu">mm</span></span></div>
+  <div class="pr"><span class="pl">Speed</span><span><span class="pv grn" id="dSpeed">---</span><span class="pu">m/s</span></span></div>
+  <div class="pr"><span class="pl">v_along (blade)</span><span><span class="pv" id="dVa">---</span><span class="pu">m/s</span></span></div>
+  <div class="pr"><span class="pl">v_perp (across)</span><span><span class="pv" id="dVp">---</span><span class="pu">m/s</span></span></div>
+  <hr style="border-color:#1e2d42;margin:3px 0">
+  <div class="pr"><span class="pl">F_lateral (GPU)</span><span><span class="pv red" id="dFlat">---</span><span class="pu">N</span></span></div>
+  <div class="pr"><span class="pl">F_along (GPU)</span><span><span class="pv grn" id="dFalong">---</span><span class="pu">N</span></span></div>
+  <div class="pr"><span class="pl">Pen. depth (GPU)</span><span><span class="pv org" id="dPenGPU">---</span><span class="pu">mm</span></span></div>
+  <hr style="border-color:#1e2d42;margin:3px 0">
+  <div class="pr"><span class="pl">SPS</span><span class="pv" id="dSPS">---</span></div>
+  <div class="pr"><span class="pl">Frame</span><span class="pv" id="dFrame">---</span></div>
+  <div class="pr"><span class="pl">Particles</span><span class="pv" id="dParts">---</span></div>
+  <div class="btn-row">
+    <button onclick="wsSend({cmd:'toggle_mesh'})">Toggle Mesh/Box</button>
+    <button onclick="wsSend({cmd:'reset'})">Reset Ice</button>
+  </div>
+  <div class="cr"><div class="ch"><span class="cn">Hollow (mm)</span><span class="cv-wrap"><input type="number" class="ni" id="nHollow" min="5" max="50" step="0.5" value="15.875"><span class="pu">mm</span></span></div>
+    <input type="range" id="sHollow" min="5" max="50" step="0.5" value="15.875">
+  </div>
+</div>
+
 <!-- ═══ EQUATIONS ═══ -->
 <div class="sec">
-  <div class="sec-t">KEY EQUATIONS</div>
+  <div class="sec-t">KEY EQUATIONS (analytical)</div>
   <div style="font-family:monospace;font-size:10px;color:#7a9abb;line-height:1.4">
     Fy = m&middot;g<br>
     F_body = m&middot;g / cos(&theta;)<br>
@@ -195,7 +221,7 @@ button.active{background:#0074D9;color:#fff;border-color:#0074D9}
   <div class="lr"><span class="lc" style="background:#FFDC00"></span>&theta; arc / arc path</div>
 </div>
 
-<div id="info-bar">Static frame &mdash; no time evolution &mdash; based on <a href="https://www.real-world-physics-problems.com/physics-of-ice-skating.html" style="color:#4a8abf">real-world-physics-problems.com</a></div>
+<div id="info-bar">GPU mesh collision engine &mdash; real CAD geometry &mdash; based on <a href="https://www.real-world-physics-problems.com/physics-of-ice-skating.html" style="color:#4a8abf">real-world-physics-problems.com</a></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
@@ -204,6 +230,7 @@ button.active{background:#0074D9;color:#fff;border-color:#0074D9}
 // CONSTANTS
 // ═══════════════════════════════════════════════════
 const G_ACC = 9.81;
+const SCALE = 50; // matches warp_server.py SCALE factor
 const BLADE_LEN = 0.28;
 const BLADE_T = 0.003;
 const BLADE_H = 0.03;
@@ -898,6 +925,131 @@ window.addEventListener('resize',()=>{
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth-PW,innerHeight);
 });
+
+// ═══════════════════════════════════════════════════
+// WEBSOCKET → GPU PHYSICS ENGINE
+// ═══════════════════════════════════════════════════
+let ws = null;
+let wsConnected = false;
+let gpuState = null;
+
+function wsSend(obj) {
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
+}
+
+function connectWS() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const url = proto + '//' + location.host + '/ws';
+  ws = new WebSocket(url);
+  ws.onopen = () => {
+    wsConnected = true;
+    const el = document.getElementById('wsStatus');
+    el.textContent = 'GPU Engine Connected';
+    el.style.background = '#2ecc40';
+    el.style.color = '#000';
+    // Send current slider state to server
+    sendAllParams();
+  };
+  ws.onmessage = (e) => {
+    const s = JSON.parse(e.data);
+    if (s.type === 'state') {
+      gpuState = s;
+      updateGPUHud(s);
+    }
+  };
+  ws.onclose = () => {
+    wsConnected = false;
+    const el = document.getElementById('wsStatus');
+    el.textContent = 'Disconnected — reconnecting...';
+    el.style.background = '#e74c3c';
+    el.style.color = '#fff';
+    setTimeout(connectWS, 2000);
+  };
+  ws.onerror = () => { ws.close(); };
+}
+
+function sendAllParams() {
+  wsSend({ cmd: 'lean', value: S.lean });
+  wsSend({ cmd: 'alpha', value: S.alpha });
+  wsSend({ cmd: 'pitch', value: S.pitch });
+  wsSend({ cmd: 'weight', value: S.mass });
+  const H_mpa = iceHardness(S.temp);
+  wsSend({ cmd: 'ice', value: H_mpa });
+  wsSend({ cmd: 'set_velocity', vx: S.gvx * SCALE, vy: S.gvy * SCALE });
+}
+
+// Debounced send for slider changes
+let sendTimer = null;
+function debouncedSend(cmdObj) {
+  wsSend(cmdObj);
+}
+
+// Hook slider changes to also send WebSocket commands
+function sendForKey(key) {
+  if (key === 'lean') debouncedSend({ cmd: 'lean', value: S.lean });
+  else if (key === 'alpha') debouncedSend({ cmd: 'alpha', value: S.alpha });
+  else if (key === 'pitch') debouncedSend({ cmd: 'pitch', value: S.pitch });
+  else if (key === 'mass') debouncedSend({ cmd: 'weight', value: S.mass });
+  else if (key === 'temp') {
+    const H_mpa = iceHardness(S.temp);
+    debouncedSend({ cmd: 'ice', value: H_mpa });
+  }
+  else if (key === 'gvx' || key === 'gvy') {
+    debouncedSend({ cmd: 'set_velocity', vx: S.gvx * SCALE, vy: S.gvy * SCALE });
+  }
+  else if (key === 'gz') {
+    debouncedSend({ cmd: 'set_L', value: S.gz });
+  }
+}
+paramBindings.forEach(([sid, nid, key]) => {
+  const slider = document.getElementById(sid);
+  const numIn = document.getElementById(nid);
+  if (!slider || !numIn) return;
+  slider.addEventListener('input', () => sendForKey(key));
+  numIn.addEventListener('change', () => sendForKey(key));
+});
+
+// Hollow radius slider
+{
+  const hs = document.getElementById('sHollow');
+  const hn = document.getElementById('nHollow');
+  if (hs && hn) {
+    function syncHollow(val) {
+      val = parseFloat(val);
+      hs.value = val;
+      hn.value = val;
+      debouncedSend({ cmd: 'hollow_radius', value: val });
+    }
+    hs.addEventListener('input', () => syncHollow(hs.value));
+    hn.addEventListener('input', () => syncHollow(hn.value));
+    hn.addEventListener('change', () => syncHollow(hn.value));
+  }
+}
+
+function updateGPUHud(s) {
+  const el = id => document.getElementById(id);
+  if (s.collision_mode !== undefined) el('dMode').textContent = s.collision_mode.toUpperCase();
+  if (s.hollow_radius_mm !== undefined) el('dHollow').textContent = s.hollow_radius_mm.toFixed(1);
+  if (s.speed !== undefined) el('dSpeed').textContent = s.speed.toFixed(3);
+  if (s.va !== undefined) el('dVa').textContent = s.va.toFixed(3);
+  if (s.vp !== undefined) el('dVp').textContent = s.vp.toFixed(3);
+  if (s.f_lateral !== undefined) el('dFlat').textContent = s.f_lateral.toFixed(0);
+  if (s.f_along !== undefined) el('dFalong').textContent = s.f_along.toFixed(0);
+  if (s.pen !== undefined) el('dPenGPU').textContent = s.pen.toFixed(2);
+  if (s.frame !== undefined) el('dFrame').textContent = s.frame;
+  if (s.n_ice !== undefined) el('dParts').textContent = s.n_ice;
+
+  // Update analytical values from GPU where applicable
+  if (s.mu_p !== undefined) el('dRalong').textContent = Math.abs(s.mu_a || 0).toFixed(1);
+  if (s.mu_p !== undefined) el('dRacross').textContent = Math.abs(s.mu_p || 0).toFixed(0);
+
+  // Update balance info from GPU state
+  if (s.theta_balance !== undefined) el('dThetaBal').textContent = s.theta_balance.toFixed(1);
+  if (s.theta_actual !== undefined) el('dTheta').textContent = s.theta_actual.toFixed(1);
+}
+
+// Start connection
+connectWS();
 </script>
 </body>
 </html>
