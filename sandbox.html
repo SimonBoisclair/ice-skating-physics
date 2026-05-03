@@ -557,18 +557,17 @@ function updateScene() {
   const zCorr = BLADE_HALF * Math.abs(Math.sin(pitchAngle));
 
   // Position blade so its contact zone center is at P_center
-  // The blade edge dips INTO the ice by an exaggerated visible depth
+  // The blade edge dips INTO the ice by the real penetration depth (no exaggeration)
   const ca = Math.cos(alphaRad), sa = Math.sin(alphaRad);
   const ccx = c.contactCenterX;
   const penD = c.penDepth;
   const leanRad = S.lean * Math.PI / 180;
-  // Visual depth: exaggerated but capped at 25% of blade height
-  const visDepthBlade = Math.min(Math.max(penD * 50, 0.004), BLADE_H * 0.25);
-  // Lower blade by visual depth so the edge visibly goes below z=0
+  // Real penetration depth — 1:1 scale, no visual exaggeration
+  const visDepthBlade = penD;
   bladeAssembly.position.set(
     S.px - ccx * ca,  // blade shifted so contact center = Px
     S.py - ccx * sa,  // blade shifted so contact center = Py
-    zCorr - visDepthBlade  // blade lowered so edge visibly penetrates ice
+    zCorr - visDepthBlade  // blade lowered by real pen depth
   );
   bladeAssembly.rotation.z = alphaRad; // α rotates blade on ice
   leanGroup.quaternion.setFromAxisAngle(LEAN_AXIS, leanRad);
