@@ -242,6 +242,7 @@ def physics_step_mesh(
     blade_lean: float,
     mesh_id: wp.uint64,
     blade_fx_out: wp.array(dtype=wp.vec3),
+    pen_out: wp.array(dtype=float),
     n: int,
     dt: float,
     stiffness: float,
@@ -260,6 +261,7 @@ def physics_step_mesh(
 
     p = pos[i]
     v = vel[i]
+    blade_pen = float(0.0)
 
     force = wp.vec3(0.0, 0.0, -G * ICE_RHO)
 
@@ -316,6 +318,7 @@ def physics_step_mesh(
             if signed_dist < particle_r:
                 # Particle overlaps or is inside mesh — push out
                 pen = particle_r - signed_dist
+                blade_pen = pen  # record raw penetration before cap
                 
                 # Cap penetration to avoid explosive forces
                 max_pen = particle_r * 3.0
@@ -361,6 +364,8 @@ def physics_step_mesh(
                 # Reaction on blade (Newton's 3rd law)
                 wp.atomic_add(blade_fx_out, 0, -world_force)
 
+    pen_out[i] = blade_pen
+
     # Damping
     force = force - v * damping
 
@@ -384,6 +389,7 @@ def physics_step(
     blade_yaw: float,
     blade_lean: float,
     blade_fx_out: wp.array(dtype=wp.vec3),
+    pen_out: wp.array(dtype=float),
     n: int,
     dt: float,
     stiffness: float,
@@ -396,6 +402,7 @@ def physics_step(
 
     p = pos[i]
     v = vel[i]
+    blade_pen = float(0.0)
 
     force = wp.vec3(0.0, 0.0, -G * ICE_RHO)
 
@@ -438,6 +445,7 @@ def physics_step(
         px = sx - wp.abs(lx)
         py = sy - wp.abs(ly2)
         pz = sz - wp.abs(lz)
+        blade_pen = wp.min(px, wp.min(py, pz))  # record minimum pen axis
 
         # Determine push-out direction (minimum penetration)
         # ANISOTROPIC stiffness:
@@ -487,6 +495,8 @@ def physics_step(
         # Reaction on blade (Newton's 3rd law)
         wp.atomic_add(blade_fx_out, 0, -world_force)
 
+    pen_out[i] = blade_pen
+
     # Damping
     force = force - v * damping
 
@@ -495,6 +505,23 @@ def physics_step(
     p_new = p + v_new * dt
     vel[i] = v_new
     pos[i] = p_new
+
+
+@wp.kernel
+def pen_reduce(
+    pen_in: wp.array(dtype=float),
+    out: wp.array(dtype=float),
+    n: int,
+):
+    """Reduce penetration array to [max_pen, sum_pen, count]."""
+    i = wp.tid()
+    if i >= n:
+        return
+    p = pen_in[i]
+    if p > 0.0:
+        wp.atomic_max(out, 0, p)
+        wp.atomic_add(out, 1, p)
+        wp.atomic_add(out, 2, 1.0)
 
 
 class BladePhysics:
@@ -520,6 +547,15 @@ class BladePhysics:
         self.ice_pos = wp.zeros(N_ICE, dtype=wp.vec3, device="cuda:0")
         self.ice_vel = wp.zeros(N_ICE, dtype=wp.vec3, device="cuda:0")
         self.blade_force = wp.zeros(1, dtype=wp.vec3, device="cuda:0")
+        # Per-particle penetration depth output (sim units)
+        self.pen_out = wp.zeros(N_ICE, dtype=float, device="cuda:0")
+        # Reduction buffer: [max_pen, sum_pen, count]
+        self.pen_stats = wp.zeros(3, dtype=float, device="cuda:0")
+        # Smoothed penetration values for display
+        self.pen_max_mm = 0.0
+        self.pen_avg_mm = 0.0
+        self.pen_contact_count = 0
+        self.pen_contact_area_mm2 = 0.0
 
         # Load blade mesh for CAD collision
         self.blade_mesh = None
@@ -585,6 +621,8 @@ class BladePhysics:
                   device="cuda:0")
         
         self.blade_force.zero_()
+        self.pen_out.zero_()
+        self.pen_stats.zero_()
         half_l = BLADE_LEN / 2.0
         half_w = BLADE_W / 2.0
         half_h = BLADE_H / 2.0
@@ -602,6 +640,7 @@ class BladePhysics:
                           float(blade_dir), float(self.lean),
                           self.blade_mesh.id,
                           self.blade_force,
+                          self.pen_out,
                           N_ICE, DT, STIFFNESS, DAMPING, PARTICLE_R,
                       ],
                       device="cuda:0")
@@ -614,9 +653,15 @@ class BladePhysics:
                           half_l, half_w, half_h,
                           float(blade_dir), float(self.lean),
                           self.blade_force,
+                          self.pen_out,
                           N_ICE, DT, STIFFNESS, DAMPING, PARTICLE_R,
                       ],
                       device="cuda:0")
+
+        # Reduce per-particle penetration to stats: [max, sum, count]
+        wp.launch(pen_reduce, dim=N_ICE,
+                  inputs=[self.pen_out, self.pen_stats, N_ICE],
+                  device="cuda:0")
         wp.synchronize()
 
     def step(self):
@@ -647,7 +692,26 @@ class BladePhysics:
         bf = self.blade_force.numpy()[0]
         reaction_fx = float(bf[0])
         reaction_fy = float(bf[1])
-        
+
+        # Read penetration stats: [max_pen, sum_pen, count] in sim units
+        ps = self.pen_stats.numpy()
+        pen_max_sim = float(ps[0])
+        pen_sum_sim = float(ps[1])
+        pen_count = int(ps[2])
+        # Convert sim units to real mm: sim_distance / SCALE * 1000
+        sim_to_mm = 1000.0 / SCALE
+        d = self.force_decay
+        raw_max = pen_max_sim * sim_to_mm
+        raw_avg = (pen_sum_sim / max(pen_count, 1)) * sim_to_mm
+        self.pen_max_mm = d * self.pen_max_mm + (1 - d) * raw_max
+        self.pen_avg_mm = d * self.pen_avg_mm + (1 - d) * raw_avg
+        self.pen_contact_count = pen_count
+        # Contact area: count × particle cross-section area in real mm²
+        # Each particle occupies π×r² in real space (r = PARTICLE_R / SCALE in meters)
+        particle_r_real_m = PARTICLE_R / SCALE
+        particle_area_mm2 = math.pi * (particle_r_real_m * 1000) ** 2
+        self.pen_contact_area_mm2 = d * self.pen_contact_area_mm2 + (1 - d) * (pen_count * particle_area_mm2)
+
         # Accumulate forces for display (along/perp to blade direction)
         blade_dir = self.yaw + self.alpha
         cos_b = math.cos(blade_dir)
@@ -850,7 +914,12 @@ class BladePhysics:
             'pitch_val': round(self.pitch, 3),
             'mu_a': round(f_along_disp, 2),
             'mu_p': round(f_perp_disp, 2),
-            'pen': round(min(2.0, 0.3 + math.degrees(self.lean) / 45.0 * 1.7), 3),  # 0.3-2.0mm based on lean
+            # Real GPU penetration from particle simulation
+            'pen': round(self.pen_max_mm, 4),  # max penetration depth (mm)
+            'pen_max_mm': round(self.pen_max_mm, 4),
+            'pen_avg_mm': round(self.pen_avg_mm, 4),
+            'pen_contact_count': self.pen_contact_count,
+            'pen_contact_area_mm2': round(self.pen_contact_area_mm2, 2),
             'Lc': round(BLADE_LEN_REAL * 0.15, 4),
             'R': round(R, 4),
             'zone': idx,
