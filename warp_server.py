@@ -228,6 +228,128 @@ def load_blade_mesh(stl_path, scale, hollow_radius=HOLLOW_RADIUS_DEFAULT):
     return wp_mesh, mesh_data
 
 
+class BladeGeometry:
+    """Pre-computed blade-ice contact geometry from real STL mesh.
+
+    Given (lean, pitch, depth), computes contact_length, projected_area,
+    and effective_width by rotating the STL vertices and finding which
+    are below the ice plane.
+
+    Builds a lookup table at init for fast bilinear interpolation at runtime.
+    """
+
+    def __init__(self, stl_path, hollow_radius=HOLLOW_RADIUS_DEFAULT):
+        import trimesh as _tm
+        m = _tm.load(stl_path)
+        self.verts = m.vertices.copy()  # (N, 3) in STL coords: X=along, Y=height, Z=thickness
+        print(f"[blade_geom] Loaded {len(self.verts)} vertices for contact geometry")
+
+        # Lookup table axes
+        self.lean_min, self.lean_max, self.lean_step = 0.0, 61.0, 1.0
+        self.pitch_min, self.pitch_max, self.pitch_step = -5.0, 5.0, 0.5
+        self.depth_min, self.depth_max, self.depth_step = 0.05, 2.0, 0.05  # mm
+
+        n_lean = int((self.lean_max - self.lean_min) / self.lean_step) + 1
+        n_pitch = int((self.pitch_max - self.pitch_min) / self.pitch_step) + 1
+        n_depth = int((self.depth_max - self.depth_min) / self.depth_step) + 1
+
+        # Tables: [lean_idx, pitch_idx, depth_idx] -> value
+        self.tbl_length = np.zeros((n_lean, n_pitch, n_depth))  # meters
+        self.tbl_width = np.zeros((n_lean, n_pitch, n_depth))   # meters
+        self.tbl_area = np.zeros((n_lean, n_pitch, n_depth))    # m²
+        self.tbl_count = np.zeros((n_lean, n_pitch, n_depth), dtype=int)
+
+        v = self.verts
+        t0 = time.time()
+        for il in range(n_lean):
+            lean_deg = self.lean_min + il * self.lean_step
+            lean_rad = math.radians(lean_deg)
+            cos_l = math.cos(lean_rad)
+            sin_l = math.sin(lean_rad)
+
+            # Rotate by lean around X axis (STL: Y=height, Z=thickness)
+            ry = v[:, 1] * cos_l - v[:, 2] * sin_l
+            rz = v[:, 1] * sin_l + v[:, 2] * cos_l
+
+            for ip in range(n_pitch):
+                pitch_deg = self.pitch_min + ip * self.pitch_step
+                pitch_rad = math.radians(pitch_deg)
+                cos_p = math.cos(pitch_rad)
+                sin_p = math.sin(pitch_rad)
+
+                # Apply pitch (rotate around Z axis in X-ry plane)
+                rx_p = v[:, 0] * cos_p - ry * sin_p
+                ry_p = v[:, 0] * sin_p + ry * cos_p
+
+                min_y = ry_p.min()
+
+                for id_ in range(n_depth):
+                    depth_mm = self.depth_min + id_ * self.depth_step
+                    depth_m = depth_mm / 1000.0
+
+                    in_ice = (ry_p - min_y) < depth_m
+                    cnt = int(in_ice.sum())
+                    self.tbl_count[il, ip, id_] = cnt
+
+                    if cnt >= 2:
+                        x_in = rx_p[in_ice]
+                        z_in = rz[in_ice]
+                        clen = float(x_in.max() - x_in.min())
+                        cwid = float(z_in.max() - z_in.min())
+                        self.tbl_length[il, ip, id_] = clen
+                        self.tbl_width[il, ip, id_] = cwid
+                        self.tbl_area[il, ip, id_] = clen * cwid
+                    # else: stays 0
+
+        dt = time.time() - t0
+        print(f"[blade_geom] Lookup table built: {n_lean}×{n_pitch}×{n_depth} = "
+              f"{n_lean * n_pitch * n_depth} entries in {dt:.1f}s")
+
+    def query(self, lean_deg, pitch_deg, depth_mm):
+        """Interpolate contact geometry for given blade pose and penetration.
+
+        Returns (contact_length_m, effective_width_m, projected_area_m2, n_verts)
+        """
+        # Clamp to table bounds
+        lean_deg = max(self.lean_min, min(self.lean_max - self.lean_step, lean_deg))
+        pitch_deg = max(self.pitch_min, min(self.pitch_max - self.pitch_step, pitch_deg))
+        depth_mm = max(self.depth_min, min(self.depth_max - self.depth_step, depth_mm))
+
+        # Indices + fractions for trilinear interpolation
+        fl = (lean_deg - self.lean_min) / self.lean_step
+        fp = (pitch_deg - self.pitch_min) / self.pitch_step
+        fd = (depth_mm - self.depth_min) / self.depth_step
+
+        il = int(fl);  fl -= il
+        ip = int(fp);  fp -= ip
+        id_ = int(fd); fd -= id_
+
+        # Trilinear interpolation
+        def _interp(tbl):
+            c000 = tbl[il, ip, id_]
+            c100 = tbl[il + 1, ip, id_]
+            c010 = tbl[il, ip + 1, id_]
+            c110 = tbl[il + 1, ip + 1, id_]
+            c001 = tbl[il, ip, id_ + 1]
+            c101 = tbl[il + 1, ip, id_ + 1]
+            c011 = tbl[il, ip + 1, id_ + 1]
+            c111 = tbl[il + 1, ip + 1, id_ + 1]
+            c00 = c000 * (1 - fl) + c100 * fl
+            c01 = c001 * (1 - fl) + c101 * fl
+            c10 = c010 * (1 - fl) + c110 * fl
+            c11 = c011 * (1 - fl) + c111 * fl
+            c0 = c00 * (1 - fp) + c10 * fp
+            c1 = c01 * (1 - fp) + c11 * fp
+            return c0 * (1 - fd) + c1 * fd
+
+        clen = _interp(self.tbl_length)
+        cwid = _interp(self.tbl_width)
+        carea = _interp(self.tbl_area)
+        cnt = int(_interp(self.tbl_count.astype(float)))
+
+        return clen, cwid, carea, cnt
+
+
 @wp.kernel
 def physics_step_mesh(
     pos: wp.array(dtype=wp.vec3),
@@ -576,6 +698,19 @@ class BladePhysics:
             else:
                 print(f"[physics] Mesh collision disabled, using box")
 
+        # Blade contact geometry lookup table from real STL
+        self.blade_geom = None
+        if os.path.exists(STL_PATH):
+            try:
+                self.blade_geom = BladeGeometry(STL_PATH, self.hollow_radius)
+            except Exception as e:
+                print(f"[physics] BladeGeometry init failed: {e}")
+
+        # Contact geometry values (updated each step from lookup table)
+        self.contact_length_mm = 0.0
+        self.contact_width_mm = 0.0
+        self.contact_area_mm2 = 0.0
+
         # Blade direction = yaw + alpha (physical blade orientation in world)
         # yaw = travel/heading direction (updated by arc turning)
         # alpha = offset angle (foot opening)
@@ -711,6 +846,15 @@ class BladePhysics:
         particle_r_real_m = PARTICLE_R / SCALE
         particle_area_mm2 = math.pi * (particle_r_real_m * 1000) ** 2
         self.pen_contact_area_mm2 = d * self.pen_contact_area_mm2 + (1 - d) * (pen_count * particle_area_mm2)
+
+        # Query real blade geometry for contact length/width/area
+        if self.blade_geom is not None and self.pen_max_mm > 0.01:
+            lean_deg = abs(math.degrees(self.lean))
+            pitch_deg = self.pitch * 5.0  # pitch slider -1..+1 → ±5° tilt
+            clen, cwid, carea, _ = self.blade_geom.query(lean_deg, pitch_deg, self.pen_max_mm)
+            self.contact_length_mm = d * self.contact_length_mm + (1 - d) * (clen * 1000)
+            self.contact_width_mm = d * self.contact_width_mm + (1 - d) * (cwid * 1000)
+            self.contact_area_mm2 = d * self.contact_area_mm2 + (1 - d) * (carea * 1e6)
 
         # Accumulate forces for display (along/perp to blade direction)
         blade_dir = self.yaw + self.alpha
@@ -920,7 +1064,11 @@ class BladePhysics:
             'pen_avg_mm': round(self.pen_avg_mm, 4),
             'pen_contact_count': self.pen_contact_count,
             'pen_contact_area_mm2': round(self.pen_contact_area_mm2, 2),
-            'Lc': round(BLADE_LEN_REAL * 0.15, 4),
+            # Real blade contact geometry from STL mesh lookup
+            'Lc': round(self.contact_length_mm / 1000, 4),  # contact length (m)
+            'contact_length_mm': round(self.contact_length_mm, 2),
+            'contact_width_mm': round(self.contact_width_mm, 3),
+            'contact_area_geom_mm2': round(self.contact_area_mm2, 2),
             'R': round(R, 4),
             'zone': idx,
             'zone_name': zone_name,

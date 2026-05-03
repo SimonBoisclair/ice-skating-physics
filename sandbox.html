@@ -28,7 +28,7 @@ canvas{display:block}
 .pr{display:flex;justify-content:space-between;align-items:center;margin:2px 0}
 .pl{color:#6a8aaa;font-size:10px}.pv{font-family:'Consolas',monospace;font-size:11px;color:#fff;font-weight:500}
 .pu{color:#4a6a8a;font-size:9px;margin-left:2px}
-.pv.grn{color:#2ecc40}.pv.red{color:#ff4136}.pv.blu{color:#0074D9}.pv.ylw{color:#FFDC00}.pv.org{color:#FF851B}.pv.pur{color:#B10DC9}
+.pv.grn{color:#2ecc40}.pv.red{color:#ff4136}.pv.blu{color:#0074D9}.pv.ylw{color:#FFDC00}.pv.org{color:#FF851B}.pv.pur{color:#B10DC9}.pv.cyn{color:#39CCCC}
 
 .cr{margin:4px 0}
 .ch{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:1px}
@@ -137,7 +137,11 @@ button.active{background:#0074D9;color:#fff;border-color:#0074D9}
   <div class="pr"><span class="pl">Pen. max (GPU)</span><span><span class="pv org" id="dDepth">---</span><span class="pu">mm</span></span></div>
   <div class="pr"><span class="pl">Pen. avg (GPU)</span><span><span class="pv org" id="dPenAvg">---</span><span class="pu">mm</span></span></div>
   <div class="pr"><span class="pl">Contact particles</span><span class="pv" id="dPenCount">---</span></div>
-  <div class="pr"><span class="pl">Contact area</span><span><span class="pv" id="dPenArea">---</span><span class="pu">mm&sup2;</span></span></div>
+  <div class="pr"><span class="pl">Contact area (particles)</span><span><span class="pv" id="dPenArea">---</span><span class="pu">mm&sup2;</span></span></div>
+  <hr style="border-color:#1e2d42;margin:3px 0">
+  <div class="pr"><span class="pl">Contact length (STL)</span><span><span class="pv cyn" id="dCLen">---</span><span class="pu">mm</span></span></div>
+  <div class="pr"><span class="pl">Contact width (STL)</span><span><span class="pv cyn" id="dCWid">---</span><span class="pu">mm</span></span></div>
+  <div class="pr"><span class="pl">Contact area (STL)</span><span><span class="pv cyn" id="dCArea">---</span><span class="pu">mm&sup2;</span></span></div>
   <hr style="border-color:#1e2d42;margin:3px 0">
   <div class="pr"><span class="pl">Lean (actual)</span><span><span class="pv ylw" id="dTheta">---</span><span class="pu">&deg;</span></span></div>
   <div class="pr"><span class="pl">&alpha; (foot opening)</span><span><span class="pv" id="dAlphaGPU">---</span><span class="pu">&deg;</span></span></div>
@@ -746,6 +750,9 @@ function updateScene() {
   if (g.pen_avg_mm !== undefined) el('dPenAvg').textContent = g.pen_avg_mm.toFixed(3);
   if (g.pen_contact_count !== undefined) el('dPenCount').textContent = g.pen_contact_count;
   if (g.pen_contact_area_mm2 !== undefined) el('dPenArea').textContent = g.pen_contact_area_mm2.toFixed(1);
+  if (g.contact_length_mm !== undefined) el('dCLen').textContent = g.contact_length_mm.toFixed(1);
+  if (g.contact_width_mm !== undefined) el('dCWid').textContent = g.contact_width_mm.toFixed(2);
+  if (g.contact_area_geom_mm2 !== undefined) el('dCArea').textContent = g.contact_area_geom_mm2.toFixed(1);
   el('dTheta').textContent = (g.theta_actual !== undefined ? g.theta_actual : c.thetaDeg).toFixed(1);
   if (g.alpha !== undefined) el('dAlphaGPU').textContent = g.alpha.toFixed(1);
   el('dZone').textContent = c.zone_name;
