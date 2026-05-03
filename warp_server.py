@@ -229,22 +229,62 @@ def load_blade_mesh(stl_path, scale, hollow_radius=HOLLOW_RADIUS_DEFAULT):
 
 
 class BladeGeometry:
-    """Pre-computed blade-ice contact geometry from real STL mesh.
+    """Contact geometry derived from the real blade STL rocker profile
+    and hollow-grind cross-section.
 
-    Given (lean, pitch, depth), computes contact_length, projected_area,
-    and effective_width by rotating the STL vertices and finding which
-    are below the ice plane.
+    Instead of taking the span of vertices below a plane, we:
+      1. Extract the rocker curve (X → Y_rise) from the blade bottom edge.
+      2. Model the hollow-grind cross-section as a circular arc.
+      3. For a given (lean, pitch, depth), intersect the rocker curve with
+         the ice plane to get contact_length, and compute effective_width
+         from the hollow geometry.
 
-    Builds a lookup table at init for fast bilinear interpolation at runtime.
+    A 2-D lookup table (lean × pitch) stores contact_length and width as
+    functions of depth via the rocker spline, enabling fast trilinear
+    interpolation at runtime.
     """
+
+    # Rocker spline sample count along the blade
+    N_PROFILE = 500
+    # Cross-section sample count for hollow-grind width
+    N_CROSS = 500
 
     def __init__(self, stl_path, hollow_radius=HOLLOW_RADIUS_DEFAULT):
         import trimesh as _tm
-        m = _tm.load(stl_path)
-        self.verts = m.vertices.copy()  # (N, 3) in STL coords: X=along, Y=height, Z=thickness
-        print(f"[blade_geom] Loaded {len(self.verts)} vertices for contact geometry")
+        from scipy.interpolate import interp1d
 
-        # Lookup table axes
+        m = _tm.load(stl_path)
+        v = m.vertices  # STL: X=along blade, Y=height, Z=thickness
+
+        # --- 1. Extract rocker profile (X → rise from lowest point) ---
+        # Filter to blade bottom edge (|Z| < 2mm, Y < 5mm)
+        blade_mask = (np.abs(v[:, 2]) <= 0.002) & (v[:, 1] < 0.005)
+        bv = v[blade_mask]
+
+        x_min_edge = bv[:, 0].min() + 0.002  # exclude extreme tips
+        x_max_edge = bv[:, 0].max() - 0.002
+        x_samples = np.linspace(x_min_edge, x_max_edge, self.N_PROFILE)
+        raw_y = np.full(self.N_PROFILE, np.inf)
+        for i, x in enumerate(x_samples):
+            near = np.abs(bv[:, 0] - x) < 0.0005
+            if near.sum() > 0:
+                raw_y[i] = bv[near, 1].min()
+
+        valid = raw_y < np.inf
+        spline = interp1d(x_samples[valid], raw_y[valid],
+                          kind='cubic', fill_value='extrapolate')
+        rocker_y = spline(x_samples)
+        self.rocker_x = x_samples                    # meters
+        self.rocker_rise = rocker_y - rocker_y.min()  # meters (0 at lowest)
+        print(f"[blade_geom] Rocker profile: {valid.sum()} pts, "
+              f"X=[{x_samples[0]*1000:.1f}, {x_samples[-1]*1000:.1f}]mm, "
+              f"rise=[0, {self.rocker_rise.max()*1000:.2f}]mm")
+
+        # --- 2. Hollow-grind cross-section model ---
+        self.R_hollow = hollow_radius / 1000.0  # convert mm → m
+        self.blade_half_w = 0.0015  # 1.5mm half-thickness (from STL)
+
+        # --- 3. Build lookup table ---
         self.lean_min, self.lean_max, self.lean_step = 0.0, 61.0, 1.0
         self.pitch_min, self.pitch_max, self.pitch_step = -5.0, 5.0, 0.5
         self.depth_min, self.depth_max, self.depth_step = 0.05, 2.0, 0.05  # mm
@@ -253,78 +293,107 @@ class BladeGeometry:
         n_pitch = int((self.pitch_max - self.pitch_min) / self.pitch_step) + 1
         n_depth = int((self.depth_max - self.depth_min) / self.depth_step) + 1
 
-        # Tables: [lean_idx, pitch_idx, depth_idx] -> value
         self.tbl_length = np.zeros((n_lean, n_pitch, n_depth))  # meters
         self.tbl_width = np.zeros((n_lean, n_pitch, n_depth))   # meters
         self.tbl_area = np.zeros((n_lean, n_pitch, n_depth))    # m²
-        self.tbl_count = np.zeros((n_lean, n_pitch, n_depth), dtype=int)
 
-        v = self.verts
         t0 = time.time()
         for il in range(n_lean):
             lean_deg = self.lean_min + il * self.lean_step
             lean_rad = math.radians(lean_deg)
-            cos_l = math.cos(lean_rad)
-            sin_l = math.sin(lean_rad)
-
-            # Rotate by lean around X axis (STL: Y=height, Z=thickness)
-            ry = v[:, 1] * cos_l - v[:, 2] * sin_l
-            rz = v[:, 1] * sin_l + v[:, 2] * cos_l
 
             for ip in range(n_pitch):
                 pitch_deg = self.pitch_min + ip * self.pitch_step
                 pitch_rad = math.radians(pitch_deg)
-                cos_p = math.cos(pitch_rad)
-                sin_p = math.sin(pitch_rad)
 
-                # Apply pitch (rotate around Z axis in X-ry plane)
-                rx_p = v[:, 0] * cos_p - ry * sin_p
-                ry_p = v[:, 0] * sin_p + ry * cos_p
-
-                min_y = ry_p.min()
+                # Pitch tilts the ice plane relative to the blade:
+                # effective rise(x) = rocker_rise(x) + x * sin(pitch)
+                tilted_rise = self.rocker_rise + self.rocker_x * math.sin(pitch_rad)
+                tilted_rise -= tilted_rise.min()  # re-zero so lowest = 0
 
                 for id_ in range(n_depth):
                     depth_mm = self.depth_min + id_ * self.depth_step
                     depth_m = depth_mm / 1000.0
 
-                    in_ice = (ry_p - min_y) < depth_m
-                    cnt = int(in_ice.sum())
-                    self.tbl_count[il, ip, id_] = cnt
-
-                    if cnt >= 2:
-                        x_in = rx_p[in_ice]
-                        z_in = rz[in_ice]
-                        clen = float(x_in.max() - x_in.min())
-                        cwid = float(z_in.max() - z_in.min())
+                    in_contact = tilted_rise < depth_m
+                    if in_contact.sum() >= 2:
+                        cx = self.rocker_x[in_contact]
+                        clen = float(cx[-1] - cx[0])  # monotonic X → just endpoints
+                        w_eff = self._hollow_width(lean_rad, depth_m)
                         self.tbl_length[il, ip, id_] = clen
-                        self.tbl_width[il, ip, id_] = cwid
-                        self.tbl_area[il, ip, id_] = clen * cwid
-                    # else: stays 0
+                        self.tbl_width[il, ip, id_] = w_eff
+                        self.tbl_area[il, ip, id_] = clen * w_eff
 
         dt = time.time() - t0
-        print(f"[blade_geom] Lookup table built: {n_lean}×{n_pitch}×{n_depth} = "
+        print(f"[blade_geom] Lookup table: {n_lean}×{n_pitch}×{n_depth} = "
               f"{n_lean * n_pitch * n_depth} entries in {dt:.1f}s")
 
-    def query(self, lean_deg, pitch_deg, depth_mm):
-        """Interpolate contact geometry for given blade pose and penetration.
+    def _hollow_width(self, lean_rad, depth_m):
+        """Effective contact width from the hollow-grind cross-section.
 
-        Returns (contact_length_m, effective_width_m, projected_area_m2, n_verts)
+        Models the blade bottom as a circular arc (radius = R_hollow).
+        When leaned, the ice plane is a tilted line through the deepest point.
+        Width = span of the arc below the ice plane at the given depth.
         """
-        # Clamp to table bounds
+        R = self.R_hollow
+        hw = self.blade_half_w
+        z = np.linspace(-hw, hw, self.N_CROSS)
+
+        # Hollow-grind profile: y = R - sqrt(R² - z²)  (0 at edges, max at center)
+        y_hollow = R - np.sqrt(np.maximum(0.0, R * R - z * z))
+
+        # Lean rotates the cross-section: y_leaned = y*cos(lean) - z*sin(lean)
+        cos_l = math.cos(lean_rad)
+        sin_l = math.sin(lean_rad)
+        y_leaned = y_hollow * cos_l - z * sin_l
+        y_min = y_leaned.min()
+
+        # Width: span of z where y_leaned is within `depth` of the deepest point
+        in_contact = (y_leaned - y_min) < depth_m
+        if in_contact.sum() >= 2:
+            z_c = z[in_contact]
+            return float(z_c[-1] - z_c[0])
+        return 0.0001  # fallback: 0.1mm
+
+    def solve_depth(self, F_normal, H_pa, lean_deg, pitch_deg,
+                    tol_mm=0.005, max_iter=20):
+        """Find equilibrium penetration depth via bisection.
+
+        Solves: H × Lc(d) × w(d) = F_normal
+        where Lc(d) and w(d) come from the rocker + hollow geometry.
+
+        Returns depth in mm.
+        """
+        lo, hi = self.depth_min, self.depth_max
+        for _ in range(max_iter):
+            mid = (lo + hi) * 0.5
+            clen, cwid, _ = self.query(lean_deg, pitch_deg, mid)
+            resist = H_pa * clen * cwid  # N — ice resistance at this depth
+            if resist < F_normal:
+                lo = mid  # need deeper
+            else:
+                hi = mid  # too deep
+            if (hi - lo) < tol_mm:
+                break
+        return (lo + hi) * 0.5
+
+    def query(self, lean_deg, pitch_deg, depth_mm):
+        """Trilinear interpolation from the lookup table.
+
+        Returns (contact_length_m, effective_width_m, projected_area_m2).
+        """
         lean_deg = max(self.lean_min, min(self.lean_max - self.lean_step, lean_deg))
         pitch_deg = max(self.pitch_min, min(self.pitch_max - self.pitch_step, pitch_deg))
         depth_mm = max(self.depth_min, min(self.depth_max - self.depth_step, depth_mm))
 
-        # Indices + fractions for trilinear interpolation
         fl = (lean_deg - self.lean_min) / self.lean_step
         fp = (pitch_deg - self.pitch_min) / self.pitch_step
         fd = (depth_mm - self.depth_min) / self.depth_step
 
-        il = int(fl);  fl -= il
-        ip = int(fp);  fp -= ip
+        il = int(fl); fl -= il
+        ip = int(fp); fp -= ip
         id_ = int(fd); fd -= id_
 
-        # Trilinear interpolation
         def _interp(tbl):
             c000 = tbl[il, ip, id_]
             c100 = tbl[il + 1, ip, id_]
@@ -345,9 +414,8 @@ class BladeGeometry:
         clen = _interp(self.tbl_length)
         cwid = _interp(self.tbl_width)
         carea = _interp(self.tbl_area)
-        cnt = int(_interp(self.tbl_count.astype(float)))
 
-        return clen, cwid, carea, cnt
+        return clen, cwid, carea
 
 
 @wp.kernel
@@ -664,6 +732,8 @@ class BladePhysics:
         self.ac = 0.0  # centripetal acceleration (m/s²)
         self.G_pos = [0.0, 0.0, L_COM]  # center of mass position [x, y, z] real meters
         self.peak_push_speed = 0.0  # track max speed during push for energy conservation
+        self.ice_hardness_mpa = 4.75  # default ice hardness (MPa), updated by 'ice' command
+        self.pen_analytical_mm = 0.0  # analytical penetration: F_n / (H × Lc × w_eff)
 
         # Ice particles
         self.ice_pos = wp.zeros(N_ICE, dtype=wp.vec3, device="cuda:0")
@@ -851,10 +921,23 @@ class BladePhysics:
         if self.blade_geom is not None and self.pen_max_mm > 0.01:
             lean_deg = abs(math.degrees(self.lean))
             pitch_deg = self.pitch * 5.0  # pitch slider -1..+1 → ±5° tilt
-            clen, cwid, carea, _ = self.blade_geom.query(lean_deg, pitch_deg, self.pen_max_mm)
+            clen, cwid, carea = self.blade_geom.query(lean_deg, pitch_deg, self.pen_max_mm)
             self.contact_length_mm = d * self.contact_length_mm + (1 - d) * (clen * 1000)
             self.contact_width_mm = d * self.contact_width_mm + (1 - d) * (cwid * 1000)
             self.contact_area_mm2 = d * self.contact_area_mm2 + (1 - d) * (carea * 1e6)
+
+        # Analytical penetration: solve for depth d where H × Lc(d) × w(d) = F_normal
+        # F_normal = m × g × cos(lean), Lc(d) and w(d) from blade geometry lookup.
+        # No magic multipliers — self-consistent ploughing equilibrium.
+        if self.blade_geom is not None:
+            F_normal = self.blade_mass * 9.81 * math.cos(self.lean)
+            H_pa = self.ice_hardness_mpa * 1e6
+            lean_deg = abs(math.degrees(self.lean))
+            pitch_deg = self.pitch * 5.0
+            raw_analytical = self.blade_geom.solve_depth(
+                F_normal, H_pa, lean_deg, pitch_deg
+            )
+            self.pen_analytical_mm = d * self.pen_analytical_mm + (1 - d) * raw_analytical
 
         # Accumulate forces for display (along/perp to blade direction)
         blade_dir = self.yaw + self.alpha
@@ -1069,6 +1152,9 @@ class BladePhysics:
             'contact_length_mm': round(self.contact_length_mm, 2),
             'contact_width_mm': round(self.contact_width_mm, 3),
             'contact_area_geom_mm2': round(self.contact_area_mm2, 2),
+            # Analytical penetration: F_n / (H × Lc × w_eff) — no magic numbers
+            'pen_analytical_mm': round(self.pen_analytical_mm, 4),
+            'ice_hardness_mpa': round(self.ice_hardness_mpa, 2),
             'R': round(R, 4),
             'zone': idx,
             'zone_name': zone_name,
@@ -1153,6 +1239,7 @@ class BladePhysics:
             # Ice hardness: soft (2 MPa) → less stiffness, hard (15 MPa) → more stiffness
             # Scale STIFFNESS proportionally: medium=7 MPa → 1x, soft=2 → 0.4x, hard=15 → 2.1x
             hardness = max(1, min(20, cmd.get('value', 7)))
+            self.ice_hardness_mpa = hardness
             old_stiff = STIFFNESS
             STIFFNESS = STIFFNESS_BASE * (hardness / 7.0)
             # Re-settle ice with new stiffness to avoid explosive overlap
