@@ -115,6 +115,10 @@ class BladePhysics:
         self.force_accum_along = 0.0
         self.force_accum_perp  = 0.0
         self.force_decay = 0.99
+        
+        # Penetration calculation state
+        self.physics_paused = True  # Start paused, wait for user to click buttons
+        self.blade_at_surface = False  # True after reset_blade_position
 
     # ── particle physics step ─────────────────────────────────────
 
@@ -162,6 +166,41 @@ class BladePhysics:
         wp.synchronize()
 
     # ── settle blade Z ────────────────────────────────────────────
+
+    def reset_blade_to_surface(self):
+        """Position blade so its lowest point touches ice surface (z=ICE_H).
+        Does NOT run physics - just positions the blade."""
+        pitch_rad = self.pitch * 5.0 * math.pi / 180.0
+        lowest_offset = 0.0
+        if self.blade_geom is not None:
+            lowest_offset, lowest_x = self.blade_geom.get_lowest_point_offset(
+                self.lean, pitch_rad)
+        else:
+            lowest_offset = -0.015 * math.cos(self.lean)
+        
+        lowest_offset_scaled = lowest_offset * SCALE
+        target_z = ICE_H - lowest_offset_scaled
+        
+        self.pos[2] = target_z
+        self.vel = np.array([0.0, 0.0, 0.0])
+        self.vel_z = 0.0
+        
+        # Reinitialize ice particles
+        wp.launch(init_ice, dim=N_ICE,
+                  inputs=[self.ice_pos, self.ice_vel,
+                          N_ICE, ICE_L, ICE_W, ICE_H,
+                          self.recenter_seed + self.frame],
+                  device="cuda:0")
+        wp.synchronize()
+        
+        # Reset force accumulators
+        self.blade_force.zero_()
+        self.force_accum_along = 0.0
+        self.force_accum_perp = 0.0
+        self.pen_max_mm = 0.0
+        self.pen_avg_mm = 0.0
+        
+        print(f"[reset_blade] lowest_offset={lowest_offset*1000:.3f}mm, Z={target_z:.4f}", flush=True)
 
     def settle_blade_quick(self, steps=50):
         """Position blade so its lowest point touches ice surface (z=0).
@@ -238,6 +277,10 @@ class BladePhysics:
 
     def step(self):
         self.frame += 1
+
+        # If physics is paused, skip particle simulation but still return state
+        if self.physics_paused:
+            return self.get_state()
 
         # Push force
         fx, fy = 0.0, 0.0
@@ -483,6 +526,8 @@ class BladePhysics:
             'f_along': round(f_along_disp, 1),
             'f_lateral': round(f_perp_disp, 1),
             'n_ice': N_ICE,
+            'physics_paused': self.physics_paused,
+            'blade_at_surface': self.blade_at_surface,
         }
 
     # ── command handler ───────────────────────────────────────────
@@ -504,7 +549,6 @@ class BladePhysics:
         elif t == 'lean':
             deg = cmd.get('value', 15)
             self.lean = deg * math.pi / 180
-            self.settle_blade_quick()
 
         elif t == 'set_L':
             self.L = max(0.3, min(1.5, cmd.get('value', 0.9)))
@@ -513,7 +557,6 @@ class BladePhysics:
             deg = max(-90, min(90, cmd.get('value', 0)))
             self.alpha = deg * math.pi / 180
             print(f'[cmd] Alpha (foot opening) = {deg}\u00B0')
-            self.settle_blade_quick()
 
         elif t == 'set_velocity':
             vx = cmd.get('vx', 0.0)
@@ -523,21 +566,18 @@ class BladePhysics:
 
         elif t == 'pitch':
             self.pitch = cmd.get('value', 0)
-            self.settle_blade_quick()
 
         elif t == 'force':
             self.force_mult = cmd.get('value', 1.5)
 
         elif t == 'weight':
             self.blade_mass = cmd.get('value', 85)
-            self.settle_blade_quick()
 
         elif t == 'ice':
             hardness = max(1, min(20, cmd.get('value', 7)))
             self.ice_hardness_mpa = hardness
             STIFFNESS = STIFFNESS_BASE * (hardness / 7.0)
             print(f'[cmd] Ice hardness={hardness} MPa, stiffness={STIFFNESS:.0f}')
-            self.settle_blade_quick()
 
         elif t == 'hollow_radius':
             radius_mm = max(5.0, min(50.0, cmd.get('value', 15.875)))
@@ -548,7 +588,6 @@ class BladePhysics:
                     self.blade_mesh, self.mesh_data = load_blade_mesh(
                         STL_PATH, SCALE, self.hollow_radius)
                     print(f'[cmd] Hollow radius={radius_mm:.1f}mm')
-                    self.settle_blade_quick()
                 except Exception as e:
                     print(f'[cmd] Hollow radius change failed: {e}')
 
@@ -588,5 +627,21 @@ class BladePhysics:
                               N_ICE, ICE_L, ICE_W, ICE_H, 42],
                       device="cuda:0")
             wp.synchronize()
-            self.settle_blade_quick()
+            self.physics_paused = True
+            self.blade_at_surface = False
             print("[cmd] RESET complete")
+
+        elif t == 'reset_blade_position':
+            # Position blade so lowest point touches ice surface
+            self.reset_blade_to_surface()
+            self.blade_at_surface = True
+            self.physics_paused = True  # Stay paused until start_penetration
+            print("[cmd] Blade positioned at ice surface")
+
+        elif t == 'start_penetration':
+            # Start physics calculation - blade will sink under its weight
+            if self.blade_at_surface:
+                self.physics_paused = False
+                print("[cmd] Starting penetration calculation")
+            else:
+                print("[cmd] WARNING: Reset blade position first")

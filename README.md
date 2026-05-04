@@ -118,17 +118,19 @@ The main simulation class. Owns all state:
 6. Arc turning from lean angle (rocker zone radius)
 7. Return full state dict for WebSocket broadcast
 
-**`settle_blade_quick()`** — Called on every parameter change:
+**`reset_blade_to_surface()`** — Manual blade positioning:
 1. Compute blade's lowest point given current lean + pitch (via `BladeGeometry.get_lowest_point_offset()`)
-2. Position blade so lowest point touches ice surface (z=0)
-3. Reinitialise particles and run 50 steps
-4. Physics engine naturally calculates penetration from weight vs reaction forces
+2. Position blade so lowest point touches ice surface (z=ICE_H)
+3. Reinitialise particles, reset forces
+4. Physics stays paused until user clicks "Start Penetration"
 
 **`handle_command(cmd)`** — WebSocket command dispatch:
-- `lean`, `pitch`, `alpha` → Set angle + re-settle
-- `weight` → Set mass + re-settle
-- `ice` → Set hardness + adjust stiffness + re-settle
-- `hollow_radius` → Reload mesh with new radius + re-settle
+- `lean`, `pitch`, `alpha` → Set angle (no auto-settle)
+- `weight` → Set mass (no auto-settle)
+- `ice` → Set hardness + adjust stiffness (no auto-settle)
+- `hollow_radius` → Reload mesh with new radius (no auto-settle)
+- `reset_blade_position` → Position blade at ice surface, pause physics
+- `start_penetration` → Unpause physics, blade sinks under its weight
 - `push` → Apply force for 200 frames
 - `reset` → Return to defaults
 - `toggle_mesh` → Switch between mesh/box collision

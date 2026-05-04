@@ -8,6 +8,7 @@ import GpuReadouts from './GpuReadouts';
 import CameraButtons from './CameraButtons';
 import BladeProfileLegend from './BladeProfileLegend';
 import HollowGrind from './HollowGrind';
+import PenetrationControls from './PenetrationControls';
 
 export default function Panel({ connected, onParamSend, send, onSetCamera }) {
   return (
@@ -35,6 +36,7 @@ export default function Panel({ connected, onParamSend, send, onSetCamera }) {
       <ContactPosition onParamSend={onParamSend} />
       <SkaterInputs onParamSend={onParamSend} />
       <IceInputs onParamSend={onParamSend} />
+      <PenetrationControls send={send} />
       <GpuReadouts send={send} />
       <CameraButtons onSetCamera={onSetCamera} />
       <BladeProfileLegend />
