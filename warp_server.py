@@ -1459,6 +1459,9 @@ async def dashboard_handler(request):
 
 
 async def sandbox_handler(request):
+    dist = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'sandbox-ui', 'dist', 'index.html')
+    if os.path.exists(dist):
+        return web.FileResponse(dist)
     return web.FileResponse('./sandbox.html')
 
 
@@ -1516,6 +1519,10 @@ if __name__ == '__main__':
     app.router.add_get('/sandbox', sandbox_handler)
     app.router.add_get('/debug_mesh', debug_mesh_handler)
     app.router.add_get('/ws', ws_handler)
+    # Serve React build static assets
+    dist_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'sandbox-ui', 'dist')
+    if os.path.isdir(dist_dir):
+        app.router.add_static('/assets', os.path.join(dist_dir, 'assets'))
     app.on_startup.append(start_background_tasks)
     app.on_cleanup.append(cleanup_background_tasks)
     print("[server] Starting on port 8765...")

@@ -1,0 +1,78 @@
+/* ── Global reset & theme ── */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #0f1923;
+  color: #e0e8f0;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  overflow: hidden;
+}
+canvas { display: block; }
+
+/* ── Left panel ── */
+#panel {
+  position: fixed; top: 0; left: 0; width: 310px; height: 100vh;
+  background: rgba(12,18,28,0.96); padding: 12px 14px; overflow-y: auto;
+  font-size: 12px; z-index: 10; scrollbar-width: thin; scrollbar-color: #2a3a5c #0c121c;
+  border-right: 1px solid #1e2d42;
+}
+#panel::-webkit-scrollbar { width: 6px; }
+#panel::-webkit-scrollbar-track { background: #0c121c; }
+#panel::-webkit-scrollbar-thumb { background: #2a3a5c; border-radius: 3px; }
+#panel h1 { font-size: 14px; margin-bottom: 2px; color: #7fdbff; font-weight: 600; }
+.sub { font-size: 9px; color: #445; margin-bottom: 8px; }
+
+/* ── Sections ── */
+.sec { background: rgba(20,30,48,0.6); border: 1px solid #1e2d42; border-radius: 5px; padding: 8px 10px; margin-bottom: 6px; }
+.sec-t { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.2px; color: #5a7a9a; margin-bottom: 5px; }
+
+/* ── Property rows ── */
+.pr { display: flex; justify-content: space-between; align-items: center; margin: 2px 0; }
+.pl { color: #6a8aaa; font-size: 10px; }
+.pv { font-family: 'Consolas', monospace; font-size: 11px; color: #fff; font-weight: 500; }
+.pu { color: #4a6a8a; font-size: 9px; margin-left: 2px; }
+.pv.grn { color: #2ecc40; }
+.pv.red { color: #ff4136; }
+.pv.blu { color: #0074D9; }
+.pv.ylw { color: #FFDC00; }
+.pv.org { color: #FF851B; }
+.pv.pur { color: #B10DC9; }
+.pv.cyn { color: #39CCCC; }
+
+/* ── Slider controls ── */
+.cr { margin: 4px 0; }
+.ch { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 1px; }
+.cn { color: #7a9a; font-size: 10px; font-weight: 500; }
+.cv { font-family: monospace; font-size: 11px; color: #fff; }
+.cr input[type=range] { width: 100%; height: 5px; -webkit-appearance: none; appearance: none; background: linear-gradient(to right,#1a2a4a,#2a4a6a); border-radius: 3px; outline: none; }
+.cr input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 12px; background: #7fdbff; border-radius: 50%; cursor: pointer; }
+.ni { width: 62px; background: #0c121c; border: 1px solid #2a3d5a; color: #fff; font-family: 'Consolas', monospace; font-size: 11px; padding: 2px 4px; border-radius: 3px; text-align: right; outline: none; -moz-appearance: textfield; }
+.ni::-webkit-inner-spin-button, .ni::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; display: none; }
+.ni:focus { border-color: #7fdbff; }
+.cv-wrap { display: flex; align-items: center; gap: 3px; }
+.hint { font-size: 8px; color: #334; margin-top: 1px; }
+
+/* ── Buttons ── */
+.btn-row { display: flex; gap: 3px; flex-wrap: wrap; margin: 3px 0; }
+button { background: #1a2d4a; color: #aac; border: 1px solid #2a3d5a; padding: 4px 8px; border-radius: 3px; cursor: pointer; font-size: 10px; font-weight: 500; transition: all .15s; }
+button:hover { background: #2a4a6a; color: #fff; }
+button.active { background: #0074D9; color: #fff; border-color: #0074D9; }
+
+/* ── Zone legend ── */
+.zone-i { display: flex; align-items: center; gap: 5px; font-size: 9px; margin: 1px 0; }
+.zone-d { width: 8px; height: 8px; border-radius: 2px; flex-shrink: 0; }
+
+/* ── Legend overlay ── */
+#legend {
+  position: fixed; top: 8px; right: 8px; z-index: 5;
+  background: rgba(12,18,28,0.85); border: 1px solid #1e2d42; border-radius: 5px;
+  padding: 6px 10px; font-size: 9px; pointer-events: none;
+}
+.lr { display: flex; align-items: center; gap: 5px; margin: 1px 0; }
+.lc { width: 14px; height: 3px; border-radius: 1px; }
+
+/* ── Info bar ── */
+#info-bar {
+  position: fixed; bottom: 0; left: 0; right: 0; text-align: center;
+  background: rgba(12,18,28,0.9); padding: 5px; font-size: 9px; color: #334;
+  z-index: 10; border-top: 1px solid #1e2d42;
+}
