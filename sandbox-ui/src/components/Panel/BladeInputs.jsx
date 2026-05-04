@@ -17,21 +17,21 @@ export default function BladeInputs({ onParamSend }) {
         label={'\u03B1 (foot opening)'}
         value={params.alpha}
         min={0} max={90} step={1} unit={'\u00B0'}
-        hint="0\u00B0=glide \u00B7 45\u00B0=push \u00B7 90\u00B0=hockey stop"
+        hint={'0°=glide · 45°=push · 90°=hockey stop'}
         onChange={change('alpha')}
       />
       <SliderControl
         label="Lean angle"
         value={params.lean}
         min={0} max={60} step={1} unit={'\u00B0'}
-        hint="0\u00B0=flat \u00B7 45\u00B0=deep edge \u00B7 >55\u00B0=boot contact"
+        hint={'0°=flat · 45°=deep edge · >55°=boot contact'}
         onChange={change('lean')}
       />
       <SliderControl
         label="Pitch (rocker)"
         value={params.pitch}
         min={-1} max={1} step={0.05}
-        hint="-1=heel \u00B7 0=center \u00B7 +1=toe"
+        hint={'-1=heel · 0=center · +1=toe'}
         onChange={change('pitch')}
       />
     </div>
