@@ -169,3 +169,40 @@ class BladeGeometry:
             return c0 * (1 - fd) + c1 * fd
 
         return _interp(self.tbl_length), _interp(self.tbl_width), _interp(self.tbl_area)
+
+    # ── lowest point calculation ─────────────────────────────────
+
+    def get_lowest_point_offset(self, lean_rad, pitch_rad):
+        """Return the Z offset from blade center to lowest point.
+        
+        After applying pitch (tilt along blade) and lean (roll around blade axis),
+        compute how far below the blade center the lowest contact point is.
+        This lets us position the blade so its lowest point sits at ice surface.
+        """
+        # 1. Apply pitch to rocker profile
+        tilted_rise = self.rocker_rise + self.rocker_x * math.sin(pitch_rad)
+        min_rise = tilted_rise.min()
+        
+        # 2. Find where the lowest point is along blade length
+        lowest_idx = np.argmin(tilted_rise)
+        lowest_x = self.rocker_x[lowest_idx]
+        
+        # 3. At the lowest rocker point, compute hollow-grind lowest point with lean
+        R = self.R_hollow
+        hw = self.blade_half_w
+        z = np.linspace(-hw, hw, self.N_CROSS)
+        y_hollow = R - np.sqrt(np.maximum(0.0, R * R - z * z))
+        
+        # Rotate hollow cross-section by lean angle
+        cos_l = math.cos(lean_rad)
+        sin_l = math.sin(lean_rad)
+        y_leaned = y_hollow * cos_l - z * sin_l
+        
+        # The lowest point of the leaned hollow-grind
+        hollow_drop = y_leaned.min()
+        
+        # Total offset from blade center to lowest point (in meters)
+        # Combine rocker dip + hollow-grind dip after lean
+        total_offset = min_rise + hollow_drop
+        
+        return total_offset, lowest_x

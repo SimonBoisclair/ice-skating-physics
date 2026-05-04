@@ -164,26 +164,24 @@ class BladePhysics:
     # ── settle blade Z ────────────────────────────────────────────
 
     def settle_blade_quick(self, steps=50):
-        """Position the blade at the analytical equilibrium depth and
-        let GPU particles fill in around it for contact-force measurement."""
-        F_normal_real = self.blade_mass * G * math.cos(self.lean)
-
-        target_pen_mm = 0.3
+        """Position blade so its lowest point touches ice surface (z=0).
+        Physics engine will naturally calculate penetration from weight."""
+        
+        # Compute lowest point offset from blade center (in meters)
+        pitch_rad = self.pitch * 5.0 * math.pi / 180.0
+        lowest_offset = 0.0
         if self.blade_geom is not None:
-            H_pa = self.ice_hardness_mpa * 1e6
-            lean_deg  = abs(math.degrees(self.lean))
-            pitch_deg = self.pitch * 5.0
-            target_pen_mm = self.blade_geom.solve_depth(
-                F_normal_real, H_pa, lean_deg, pitch_deg)
-            self.pen_analytical_mm = target_pen_mm
-
-        target_pen_mm = max(0.01, target_pen_mm)
-        target_pen_scaled = target_pen_mm / 1000.0 * SCALE
-        edge_target_z = ICE_H - target_pen_scaled
-        target_z = edge_target_z + 0.75 * math.cos(self.lean)
-
-        print(f"[settle] target_pen={target_pen_mm:.3f}mm (scaled={target_pen_scaled:.4f}), "
-              f"F_n={F_normal_real:.0f}N, target_Z={target_z:.4f}", flush=True)
+            lowest_offset, lowest_x = self.blade_geom.get_lowest_point_offset(
+                self.lean, pitch_rad)
+        else:
+            # Fallback: simple estimate
+            lowest_offset = 0.75 / SCALE * math.cos(self.lean)
+        
+        # Convert to scaled coordinates and position blade so lowest point is at ice surface
+        lowest_offset_scaled = lowest_offset * SCALE
+        target_z = ICE_H + lowest_offset_scaled  # lowest_offset is negative (below center)
+        
+        print(f"[settle] lowest_offset={lowest_offset*1000:.3f}mm, target_Z={target_z:.4f}", flush=True)
 
         self.pos[2] = target_z
         self.vel   = np.array([0.0, 0.0, 0.0])
@@ -232,8 +230,7 @@ class BladePhysics:
         self.force_accum_along = 0.0
         self.force_accum_perp  = 0.0
 
-        print(f"[settle] DONE Z={self.pos[2]:.4f}, GPU_pen={self.pen_max_mm:.3f}mm, "
-              f"target={target_pen_mm:.3f}mm", flush=True)
+        print(f"[settle] DONE Z={self.pos[2]:.4f}, GPU_pen={self.pen_max_mm:.3f}mm", flush=True)
 
     # ── main simulation step ──────────────────────────────────────
 

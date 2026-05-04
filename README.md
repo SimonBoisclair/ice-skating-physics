@@ -119,10 +119,10 @@ The main simulation class. Owns all state:
 7. Return full state dict for WebSocket broadcast
 
 **`settle_blade_quick()`** — Called on every parameter change:
-1. Compute equilibrium depth from analytical model
-2. Position blade at that depth
+1. Compute blade's lowest point given current lean + pitch (via `BladeGeometry.get_lowest_point_offset()`)
+2. Position blade so lowest point touches ice surface (z=0)
 3. Reinitialise particles and run 50 steps
-4. Measure GPU contact metrics
+4. Physics engine naturally calculates penetration from weight vs reaction forces
 
 **`handle_command(cmd)`** — WebSocket command dispatch:
 - `lean`, `pitch`, `alpha` → Set angle + re-settle
