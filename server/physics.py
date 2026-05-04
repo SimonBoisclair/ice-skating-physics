@@ -535,6 +535,7 @@ class BladePhysics:
     def handle_command(self, cmd):
         global STIFFNESS
         t = cmd.get('cmd', '') or cmd.get('type', '')
+        print(f"[handle_command] Received: {cmd}, type={t}", flush=True)
 
         if t == 'push':
             self.push_fx = cmd.get('fx', 0)
@@ -633,10 +634,11 @@ class BladePhysics:
 
         elif t == 'reset_blade_position':
             # Position blade so lowest point touches ice surface
+            print("[cmd] reset_blade_position: calling reset_blade_to_surface()", flush=True)
             self.reset_blade_to_surface()
             self.blade_at_surface = True
             self.physics_paused = True  # Stay paused until start_penetration
-            print("[cmd] Blade positioned at ice surface")
+            print(f"[cmd] Blade positioned at ice surface, Z={self.pos[2]:.4f}", flush=True)
 
         elif t == 'start_penetration':
             # Start physics calculation - blade will sink under its weight

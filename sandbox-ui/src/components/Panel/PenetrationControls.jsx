@@ -8,7 +8,14 @@ export default function PenetrationControls({ send }) {
   const bladeAtSurface = state?.blade_at_surface ?? false;
 
   const handleResetBlade = () => {
-    send({ cmd: 'reset_blade_position' });
+    console.log('[PenetrationControls] Sending reset_blade_position command');
+    console.log('[PenetrationControls] send function:', send);
+    if (send) {
+      send({ cmd: 'reset_blade_position' });
+      console.log('[PenetrationControls] Command sent');
+    } else {
+      console.error('[PenetrationControls] send function is undefined!');
+    }
   };
 
   const handleStartPenetration = () => {
