@@ -168,18 +168,20 @@ class BladePhysics:
         Physics engine will naturally calculate penetration from weight."""
         
         # Compute lowest point offset from blade center (in meters)
+        # Returns negative value = lowest point is below blade center
         pitch_rad = self.pitch * 5.0 * math.pi / 180.0
         lowest_offset = 0.0
         if self.blade_geom is not None:
             lowest_offset, lowest_x = self.blade_geom.get_lowest_point_offset(
                 self.lean, pitch_rad)
         else:
-            # Fallback: simple estimate
-            lowest_offset = 0.75 / SCALE * math.cos(self.lean)
+            # Fallback: 0.75 scaled = 15mm = blade center to edge
+            lowest_offset = -0.015 * math.cos(self.lean)
         
-        # Convert to scaled coordinates and position blade so lowest point is at ice surface
+        # Position blade center so lowest point touches ice surface (ICE_H)
+        # lowest_offset is negative, so we subtract it to raise the center
         lowest_offset_scaled = lowest_offset * SCALE
-        target_z = ICE_H + lowest_offset_scaled  # lowest_offset is negative (below center)
+        target_z = ICE_H - lowest_offset_scaled
         
         print(f"[settle] lowest_offset={lowest_offset*1000:.3f}mm, target_Z={target_z:.4f}", flush=True)
 

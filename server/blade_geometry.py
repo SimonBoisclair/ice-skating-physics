@@ -173,15 +173,17 @@ class BladeGeometry:
     # ── lowest point calculation ─────────────────────────────────
 
     def get_lowest_point_offset(self, lean_rad, pitch_rad):
-        """Return the Z offset from blade center to lowest point.
+        """Return the Z offset from blade CENTER to lowest contact point (in meters).
         
-        After applying pitch (tilt along blade) and lean (roll around blade axis),
-        compute how far below the blade center the lowest contact point is.
-        This lets us position the blade so its lowest point sits at ice surface.
+        The blade mesh is centered so Z=0 is at blade center (15mm up from bottom).
+        This function computes how far below that center the lowest contact point is.
         """
-        # 1. Apply pitch to rocker profile
+        # Blade center is BLADE_H_REAL/2 = 15mm above the bottom edge
+        BLADE_CENTER_HEIGHT = 0.015  # meters
+        
+        # 1. Apply pitch to rocker profile (rocker_rise is height above lowest point)
         tilted_rise = self.rocker_rise + self.rocker_x * math.sin(pitch_rad)
-        min_rise = tilted_rise.min()
+        tilted_rise = tilted_rise - tilted_rise.min()  # normalize so min=0
         
         # 2. Find where the lowest point is along blade length
         lowest_idx = np.argmin(tilted_rise)
@@ -198,11 +200,12 @@ class BladeGeometry:
         sin_l = math.sin(lean_rad)
         y_leaned = y_hollow * cos_l - z * sin_l
         
-        # The lowest point of the leaned hollow-grind
+        # The lowest point of the leaned hollow-grind (relative to center of hollow)
         hollow_drop = y_leaned.min()
         
-        # Total offset from blade center to lowest point (in meters)
-        # Combine rocker dip + hollow-grind dip after lean
-        total_offset = min_rise + hollow_drop
+        # Total offset from blade CENTER to lowest point:
+        # = center-to-bottom (15mm) - rocker rise at contact - hollow drop
+        # Negative value means lowest point is BELOW blade center
+        total_offset = -(BLADE_CENTER_HEIGHT + hollow_drop)
         
         return total_offset, lowest_x
