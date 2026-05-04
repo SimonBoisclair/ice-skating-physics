@@ -480,8 +480,9 @@ const ThreeScene = forwardRef(function ThreeScene(_, ref) {
           I.controls.target.set(cx, cy, cz);
           break;
         case 'side':
-          I.camera.position.set(cx, cy - 1.5, cz);
-          I.controls.target.set(cx, cy, cz);
+          // Center at ice surface (z=0), zoomed in on blade
+          I.camera.position.set(cx, cy - 0.15, 0);
+          I.controls.target.set(cx, cy, 0);
           break;
         case 'front':
           I.camera.position.set(cx + 1.5, cy, cz);
