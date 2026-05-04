@@ -84,24 +84,10 @@ async def ws_handler(request):
 
 # ── HTTP route handlers ───────────────────────────────────────────
 
-async def index_handler(request):
-    return web.FileResponse('./index.html')
-
-
-async def test_handler(request):
-    return web.FileResponse('./test_live.html')
-
-
-async def dashboard_handler(request):
-    return web.FileResponse('./dashboard.html')
-
-
 async def sandbox_handler(request):
     dist = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                         'sandbox-ui', 'dist', 'index.html')
-    if os.path.exists(dist):
-        return web.FileResponse(dist)
-    return web.FileResponse('./sandbox.html')
+    return web.FileResponse(dist)
 
 
 async def debug_mesh_handler(request):
@@ -153,9 +139,7 @@ async def cleanup_background_tasks(app):
 
 def run_server(host='0.0.0.0', port=8765):
     app = web.Application()
-    app.router.add_get('/', index_handler)
-    app.router.add_get('/test', test_handler)
-    app.router.add_get('/dashboard', dashboard_handler)
+    app.router.add_get('/', sandbox_handler)
     app.router.add_get('/sandbox', sandbox_handler)
     app.router.add_get('/debug_mesh', debug_mesh_handler)
     app.router.add_get('/ws', ws_handler)
