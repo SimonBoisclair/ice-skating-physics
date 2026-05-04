@@ -36,8 +36,17 @@ export default function useWebSocket() {
     let reconnectTimer;
 
     function connect() {
-      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const url = `${proto}//${window.location.host}/ws`;
+      // Use VITE_WS_URL env var for live backend, or default to current host
+      const wsUrl = import.meta.env.VITE_WS_URL;
+      let url;
+      if (wsUrl) {
+        url = wsUrl;
+        console.log('[WebSocket] Connecting to env URL:', url);
+      } else {
+        const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        url = `${proto}//${window.location.host}/ws`;
+        console.log('[WebSocket] Connecting to:', url);
+      }
       const ws = new WebSocket(url);
       wsRef.current = ws;
 
