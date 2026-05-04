@@ -173,39 +173,24 @@ class BladeGeometry:
     # ── lowest point calculation ─────────────────────────────────
 
     def get_lowest_point_offset(self, lean_rad, pitch_rad):
-        """Return the Z offset from blade CENTER to lowest contact point (in meters).
+        """Return the vertical distance from blade CENTER to lowest contact point (in meters).
         
         The blade mesh is centered so Z=0 is at blade center (15mm up from bottom).
-        This function computes how far below that center the lowest contact point is.
+        When leaned, the vertical distance from center to contact edge is reduced by cos(lean).
+        
+        Returns: (offset, lowest_x) where offset is negative (contact point below center)
         """
         # Blade center is BLADE_H_REAL/2 = 15mm above the bottom edge
         BLADE_CENTER_HEIGHT = 0.015  # meters
         
-        # 1. Apply pitch to rocker profile (rocker_rise is height above lowest point)
+        # 1. Find contact point along blade length considering pitch
         tilted_rise = self.rocker_rise + self.rocker_x * math.sin(pitch_rad)
         tilted_rise = tilted_rise - tilted_rise.min()  # normalize so min=0
-        
-        # 2. Find where the lowest point is along blade length
         lowest_idx = np.argmin(tilted_rise)
         lowest_x = self.rocker_x[lowest_idx]
         
-        # 3. At the lowest rocker point, compute hollow-grind lowest point with lean
-        R = self.R_hollow
-        hw = self.blade_half_w
-        z = np.linspace(-hw, hw, self.N_CROSS)
-        y_hollow = R - np.sqrt(np.maximum(0.0, R * R - z * z))
+        # 2. Vertical distance from blade center to contact edge
+        # When leaned, this distance is reduced by cos(lean)
+        vertical_offset = -BLADE_CENTER_HEIGHT * math.cos(lean_rad)
         
-        # Rotate hollow cross-section by lean angle
-        cos_l = math.cos(lean_rad)
-        sin_l = math.sin(lean_rad)
-        y_leaned = y_hollow * cos_l - z * sin_l
-        
-        # The lowest point of the leaned hollow-grind (relative to center of hollow)
-        hollow_drop = y_leaned.min()
-        
-        # Total offset from blade CENTER to lowest point:
-        # = center-to-bottom (15mm) - rocker rise at contact - hollow drop
-        # Negative value means lowest point is BELOW blade center
-        total_offset = -(BLADE_CENTER_HEIGHT + hollow_drop)
-        
-        return total_offset, lowest_x
+        return vertical_offset, lowest_x
