@@ -3,7 +3,7 @@ import React, { useState } from 'react';
 const MODES = ['persp', 'side', 'front', 'top', 'blade'];
 
 export default function CameraButtons({ onSetCamera }) {
-  const [active, setActive] = useState('persp');
+  const [active, setActive] = useState('side');
 
   const handleClick = (mode) => {
     setActive(mode);

@@ -18,7 +18,7 @@ const ThreeScene = forwardRef(function ThreeScene(_, ref) {
     scene.background = new THREE.Color(0x1a2a3e);
 
     const camera = new THREE.PerspectiveCamera(50, (innerWidth - PW) / innerHeight, 0.005, 200);
-    camera.position.set(0.8, -1.2, 0.7);
+    camera.position.set(0, -0.4, 0);  // Side view default
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(innerWidth - PW, innerHeight);
@@ -28,7 +28,7 @@ const ThreeScene = forwardRef(function ThreeScene(_, ref) {
     mountRef.current.appendChild(renderer.domElement);
 
     const controls = new OrbitControls(camera, renderer.domElement);
-    controls.target.set(0, 0, 0.3);
+    controls.target.set(0, 0, 0);  // Side view: look at ice surface
     controls.enableDamping = true;
     controls.dampingFactor = 0.08;
     controls.update();
@@ -480,8 +480,8 @@ const ThreeScene = forwardRef(function ThreeScene(_, ref) {
           I.controls.target.set(cx, cy, cz);
           break;
         case 'side':
-          // Center at ice surface (z=0), zoomed in on blade
-          I.camera.position.set(cx, cy - 0.15, 0);
+          // Center at ice surface (z=0), zoomed to see full blade
+          I.camera.position.set(cx, cy - 0.4, 0);
           I.controls.target.set(cx, cy, 0);
           break;
         case 'front':
