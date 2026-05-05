@@ -16,12 +16,18 @@ import numpy as np
 
 from .config import SCALE, BLADE_LEN, BLADE_W, BLADE_H, N_ICE, ICE_H
 from .physics import BladePhysics
-from .renderer import ParticleRenderer
+# Try Warp 3D renderer first, fall back to PIL renderer
+try:
+    from .renderer_warp import WarpParticleRenderer as ParticleRenderer
+    print("[server] Using Warp OpenGL 3D renderer")
+except Exception as e:
+    from .renderer import ParticleRenderer
+    print(f"[server] Warp renderer unavailable ({e}), using PIL 2D renderer")
 
 # ── global state ──────────────────────────────────────────────────
 physics: BladePhysics | None = None
 clients: set[web.WebSocketResponse] = set()
-renderer: ParticleRenderer | None = None
+renderer = None
 stream_clients: set[web.StreamResponse] = set()
 
 

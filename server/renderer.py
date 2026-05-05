@@ -10,7 +10,7 @@ import math
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-from .config import SCALE, ICE_L, ICE_W, ICE_H, BLADE_LEN, BLADE_W, BLADE_H
+from .config import SCALE, ICE_L, ICE_W, ICE_H, ICE_SHEET, BLADE_LEN, BLADE_W, BLADE_H
 
 
 # ── rendering config ──────────────────────────────────────────────
@@ -251,38 +251,53 @@ class ParticleRenderer:
 
         margin = 15
         view_l = BLADE_LEN * 1.3
-        view_h = ICE_H * 10.0
+        # Physics coords: z=ICE_H is surface, z=0 is pool floor
+        # Show from blade top (above surface) down to z=-10mm below pool floor (solid ice)
+        view_h = ICE_SHEET * 3.0
         scale_x = (pw - 2 * margin) / view_l
         scale_z = (ph - 2 * margin) / view_h
         scale = min(scale_x, scale_z)
 
         cx = ox + pw // 2
-        surface_y = oy + int((ph - 2 * margin) * 0.3) + margin
+        # Place surface (z=ICE_H in physics) at ~35% from top
+        surface_screen_y = oy + int((ph - 2 * margin) * 0.35) + margin
 
         def to_screen(along, z):
+            """Map physics coords to screen. z=ICE_H is surface, z=0 is pool floor."""
             sx = cx + along * scale
-            sy = surface_y - (z - ICE_H) * scale
+            sy = surface_screen_y - (z - ICE_H) * scale  # z=ICE_H → surface_screen_y
             return int(sx), int(sy)
 
-        # Ice surface line
+        # Compute screen positions for ice boundaries
         x_left = ox + margin
         x_right = ox + pw - margin
-        draw.line([(x_left, surface_y), (x_right, surface_y)], fill=(60, 120, 180), width=2)
-        draw.text((x_left, surface_y - 14), "ice surface", fill=(60, 120, 180), font=self.font_small)
+        _, sy_surface = to_screen(0, ICE_H)      # z=ICE_H → surface (z=0 real)
+        _, sy_pool_floor = to_screen(0, 0)        # z=0 → pool floor (z=-5mm real)
+        _, sy_sheet_bottom = to_screen(0, -(ICE_SHEET - ICE_H))  # z=-15mm real
 
-        # Ice particle pool band (5mm deep, gradient)
-        sy_floor = surface_y + int(ICE_H * scale)
-        pool_height = sy_floor - surface_y
+        # Solid ice below particle pool (z=-5mm to z=-15mm in real coords)
+        draw.rectangle([x_left, sy_pool_floor, x_right, sy_sheet_bottom], fill=(30, 50, 80))
+
+        # Particle pool hole (surface to pool floor) — darker background
+        pool_height = max(1, sy_pool_floor - sy_surface)
         for row in range(pool_height):
             depth_frac = row / max(1, pool_height)
-            r = int(20 + 15 * (1 - depth_frac))
-            g = int(40 + 30 * (1 - depth_frac))
-            b = int(70 + 40 * (1 - depth_frac))
-            draw.line([(x_left, surface_y + row), (x_right, surface_y + row)], fill=(r, g, b))
+            r = int(15 + 10 * (1 - depth_frac))
+            g = int(20 + 15 * (1 - depth_frac))
+            b = int(35 + 20 * (1 - depth_frac))
+            draw.line([(x_left, sy_surface + row), (x_right, sy_surface + row)], fill=(r, g, b))
 
-        # Pool floor line
-        draw.line([(x_left, sy_floor), (x_right, sy_floor)], fill=(40, 80, 120), width=1)
-        draw.text((x_right - 70, sy_floor + 2), "5mm deep", fill=(40, 80, 120), font=self.font_small)
+        # Surface line (z=0 real = z=ICE_H physics)
+        draw.line([(x_left, sy_surface), (x_right, sy_surface)], fill=(60, 180, 220), width=2)
+        draw.text((x_left, sy_surface - 14), "z=0 (surface)", fill=(60, 180, 220), font=self.font_small)
+
+        # Pool floor line (z=-5mm real = z=0 physics)
+        draw.line([(x_left, sy_pool_floor), (x_right, sy_pool_floor)], fill=(40, 100, 150), width=1)
+        draw.text((x_right - 80, sy_pool_floor + 2), "z=-5mm", fill=(40, 100, 150), font=self.font_small)
+
+        # Sheet bottom line (z=-15mm real)
+        draw.line([(x_left, sy_sheet_bottom), (x_right, sy_sheet_bottom)], fill=(30, 60, 100), width=1)
+        draw.text((x_right - 80, sy_sheet_bottom + 2), "z=-15mm", fill=(30, 60, 100), font=self.font_small)
 
         # Particles projected along blade axis
         cos_b = math.cos(blade_dir)
@@ -350,48 +365,60 @@ class ParticleRenderer:
 
         # Zoom to blade thickness + some surroundings
         view_w = BLADE_W * 40.0  # show wider area
-        view_h = ICE_H * 10.0
+        view_h = ICE_SHEET * 3.0  # show full ice sheet + blade above
         scale_y = (view_pw - 2 * margin) / view_w
         scale_z = (ph - 2 * margin) / view_h
         scale = min(scale_y, scale_z)
 
         cx = ox + view_pw // 2
-        surface_y = oy + int((ph - 2 * margin) * 0.3) + margin
+        # Place surface at ~35% from top
+        surface_screen_y = oy + int((ph - 2 * margin) * 0.35) + margin
 
         cos_b = math.cos(blade_dir)
         sin_b = math.sin(blade_dir)
 
         def to_screen(across, z):
+            """Map physics coords to screen. z=ICE_H is surface, z=0 is pool floor."""
             sx = cx + across * scale
-            sy = surface_y - (z - ICE_H) * scale
+            sy = surface_screen_y - (z - ICE_H) * scale
             return int(sx), int(sy)
 
-        # Ice surface line
+        # Compute screen positions for ice boundaries
         x_left = ox + margin
         x_right = ox + view_pw - margin
-        draw.line([(x_left, surface_y), (x_right, surface_y)], fill=(60, 120, 180), width=2)
-        draw.text((x_left, surface_y - 14), "ice surface (z=0)", fill=(60, 120, 180), font=self.font_small)
+        _, sy_surface = to_screen(0, ICE_H)       # surface (z=0 real)
+        _, sy_pool_floor = to_screen(0, 0)         # pool floor (z=-5mm real)
+        _, sy_sheet_bottom = to_screen(0, -(ICE_SHEET - ICE_H))  # ice bottom (z=-15mm real)
 
-        # Ice particle pool band (5mm deep, colored gradient background)
-        sy_floor = surface_y + int(ICE_H * scale)
-        pool_height = sy_floor - surface_y
+        # Solid ice below particle pool (z=-5mm to z=-15mm)
+        draw.rectangle([x_left, sy_pool_floor, x_right, sy_sheet_bottom], fill=(30, 50, 80))
+
+        # Particle pool hole (surface to pool floor) — darker background
+        pool_height = max(1, sy_pool_floor - sy_surface)
         for row in range(pool_height):
             depth_frac = row / max(1, pool_height)
-            # Gradient from light blue (top/surface) to dark blue (bottom/deep)
-            r = int(20 + 15 * (1 - depth_frac))
-            g = int(40 + 30 * (1 - depth_frac))
-            b = int(70 + 40 * (1 - depth_frac))
-            draw.line([(x_left, surface_y + row), (x_right, surface_y + row)], fill=(r, g, b))
+            r = int(15 + 10 * (1 - depth_frac))
+            g = int(20 + 15 * (1 - depth_frac))
+            b = int(35 + 20 * (1 - depth_frac))
+            draw.line([(x_left, sy_surface + row), (x_right, sy_surface + row)], fill=(r, g, b))
 
-        # Pool floor line
-        draw.line([(x_left, sy_floor), (x_right, sy_floor)], fill=(40, 80, 120), width=1)
-        draw.text((x_left, sy_floor + 2), "pool floor (5mm)", fill=(40, 80, 120), font=self.font_small)
+        # Surface line (z=0 real)
+        draw.line([(x_left, sy_surface), (x_right, sy_surface)], fill=(60, 180, 220), width=2)
+        draw.text((x_left, sy_surface - 14), "z=0", fill=(60, 180, 220), font=self.font_small)
+
+        # Pool floor line (z=-5mm real)
+        draw.line([(x_left, sy_pool_floor), (x_right, sy_pool_floor)], fill=(40, 100, 150), width=1)
+        draw.text((x_left, sy_pool_floor + 2), "z=-5mm", fill=(40, 100, 150), font=self.font_small)
+
+        # Sheet bottom line (z=-15mm real)
+        draw.line([(x_left, sy_sheet_bottom), (x_right, sy_sheet_bottom)], fill=(30, 60, 100), width=1)
+        draw.text((x_left, sy_sheet_bottom + 2), "z=-15mm", fill=(30, 60, 100), font=self.font_small)
 
         # Depth legend on the right side of panel
         leg_x = ox + view_pw + 2
-        leg_top = surface_y
-        leg_bot = sy_floor
-        leg_height = leg_bot - leg_top
+        leg_top = sy_surface
+        leg_bot = sy_pool_floor
+        leg_height = max(1, leg_bot - leg_top)
         if leg_height > 10:
             draw.text((leg_x, leg_top - 14), "0mm", fill=LABEL_COLOR, font=self.font_small)
             draw.text((leg_x, leg_bot + 2), "5mm", fill=LABEL_COLOR, font=self.font_small)
