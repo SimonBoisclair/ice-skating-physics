@@ -48,6 +48,12 @@ class WarpParticleRenderer:
         self._mesh_verts = None
         self._mesh_faces = None
 
+        # Orbit camera state (controllable from browser)
+        self.cam_azimuth = 0.4      # radians, horizontal angle
+        self.cam_elevation = 0.6    # radians, vertical angle (0=level, pi/2=top)
+        self.cam_distance = BLADE_LEN * 1.5  # distance from target
+        self.cam_target = [0.0, 0.0, ICE_H * 0.5]  # look-at point
+
         cam_dist = BLADE_LEN * 1.5
         self._renderer = OpenGLRenderer(
             screen_width=WIDTH,
@@ -114,17 +120,23 @@ class WarpParticleRenderer:
 
         colors = self._compute_colors(ice_np, pen_np)
 
-        # Fixed camera: above and to the side, looking at blade center
-        cam_dist = BLADE_LEN * 1.2
-        cam_x = bx - cam_dist * 0.3
-        cam_y = by + cam_dist * 0.6
-        cam_z = ICE_H + BLADE_H * 3.5
+        # Orbit camera: compute position from spherical coordinates
+        az = self.cam_azimuth
+        el = self.cam_elevation
+        dist = self.cam_distance
+        tx, ty, tz = self.cam_target
 
-        # Look at ice surface center (blade position)
-        look_x, look_y, look_z = bx, by, ICE_H * 0.5
-        dx = look_x - cam_x
-        dy = look_y - cam_y
-        dz = look_z - cam_z
+        # Follow blade center for target
+        tx, ty = bx, by
+        tz = ICE_H * 0.5
+
+        cam_x = tx + dist * math.cos(el) * math.sin(az)
+        cam_y = ty + dist * math.cos(el) * math.cos(az)
+        cam_z = tz + dist * math.sin(el)
+
+        dx = tx - cam_x
+        dy = ty - cam_y
+        dz = tz - cam_z
         d = math.sqrt(dx*dx + dy*dy + dz*dz)
         if d > 0:
             dx /= d; dy /= d; dz /= d
