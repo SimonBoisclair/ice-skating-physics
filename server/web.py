@@ -224,8 +224,10 @@ async def viz_handler(request):
         }
         img {
             display: block;
-            width: 960px;
-            height: 540px;
+            width: 1280px;
+            height: 720px;
+            max-width: 95vw;
+            height: auto;
             image-rendering: pixelated;
         }
         .status {
