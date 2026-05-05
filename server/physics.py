@@ -220,7 +220,7 @@ class BladePhysics:
         
         print(f"[reset_blade] lowest_offset={lowest_offset*1000:.3f}mm, Z={target_z:.4f}", flush=True)
 
-    def settle_blade_quick(self, steps=50):
+    def settle_blade_quick(self, steps=10):
         """Position blade so its lowest point touches ice surface (z=0).
         Physics engine will naturally calculate penetration from weight."""
         

@@ -70,9 +70,9 @@ class ParticleRenderer:
 
     def __init__(self):
         self.frame_count = 0
-        self._mesh_hull_xz = None  # cached mesh silhouette for side view
-        self._mesh_hull_xy = None  # cached mesh silhouette for top view
-        self._mesh_hull_yz = None  # cached mesh silhouette for front view
+        self._mesh_tris_xz = None  # cached projected triangles for side view
+        self._mesh_tris_xy = None  # cached projected triangles for top view
+        self._mesh_tris_yz = None  # cached projected triangles for front view
         try:
             self.font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", 13)
             self.font_small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", 11)
@@ -82,26 +82,33 @@ class ParticleRenderer:
             self.font_small = self.font
             self.font_title = self.font
 
-    def _get_mesh_hulls(self, physics):
-        """Extract 2D silhouette hulls from blade mesh (cached)."""
-        if self._mesh_hull_xz is not None:
+    def _get_mesh_tris(self, physics):
+        """Extract projected 2D triangles from blade mesh for each view (cached)."""
+        if self._mesh_tris_xz is not None:
             return
 
         if physics.mesh_data is None:
             return
 
         verts = np.array(physics.mesh_data['vertices'])  # blade-local: X=along, Y=thickness, Z=height
-        # Side view: project to (X, Z)
-        self._mesh_hull_xz = _convex_hull_2d(verts[:, [0, 2]])
-        # Top view: project to (X, Y)
-        self._mesh_hull_xy = _convex_hull_2d(verts[:, [0, 1]])
-        # Front view: project to (Y, Z)
-        self._mesh_hull_yz = _convex_hull_2d(verts[:, [1, 2]])
+        faces = np.array(physics.mesh_data['faces'])     # triangle indices
+
+        # Pre-compute projected triangles for each view
+        # Each entry is a list of [(x0,y0), (x1,y1), (x2,y2)] triangles
+        self._mesh_tris_xz = []  # Side view: (X, Z) = (along, height)
+        self._mesh_tris_xy = []  # Top view: (X, Y) = (along, thickness)
+        self._mesh_tris_yz = []  # Front view: (Y, Z) = (thickness, height)
+
+        for face in faces:
+            v0, v1, v2 = verts[face[0]], verts[face[1]], verts[face[2]]
+            self._mesh_tris_xz.append(((v0[0], v0[2]), (v1[0], v1[2]), (v2[0], v2[2])))
+            self._mesh_tris_xy.append(((v0[0], v0[1]), (v1[0], v1[1]), (v2[0], v2[1])))
+            self._mesh_tris_yz.append(((v0[1], v0[2]), (v1[1], v1[2]), (v2[1], v2[2])))
 
     def render_frame(self, physics) -> bytes:
         """Render current physics state to JPEG bytes."""
         self.frame_count += 1
-        self._get_mesh_hulls(physics)
+        self._get_mesh_tris(physics)
 
         # Read particle data from GPU
         ice_np = physics.ice_pos.numpy()
@@ -139,18 +146,21 @@ class ParticleRenderer:
         img.save(buf, format='JPEG', quality=78)
         return buf.getvalue()
 
-    def _draw_mesh_silhouette(self, draw, hull_points, to_screen_fn,
-                              ox, oy, pw, ph, fill=BLADE_FILL, outline=BLADE_COLOR):
-        """Draw a mesh silhouette polygon from hull points using to_screen transform."""
-        if hull_points is None or len(hull_points) < 3:
+    def _draw_mesh_triangles(self, draw, tris, to_screen_fn,
+                             ox, oy, pw, ph, fill=BLADE_FILL, outline=BLADE_COLOR):
+        """Draw exact mesh silhouette by rendering all projected triangles."""
+        if tris is None or len(tris) == 0:
             return
-        screen_pts = []
-        for pt in hull_points:
-            sx, sy = to_screen_fn(pt[0], pt[1])
-            screen_pts.append((sx, sy))
-        # Clip check (at least some points in bounds)
-        if any(ox <= x <= ox + pw and oy <= y <= oy + ph for x, y in screen_pts):
-            draw.polygon(screen_pts, fill=fill, outline=outline)
+        for tri in tris:
+            pts = [to_screen_fn(tri[0][0], tri[0][1]),
+                   to_screen_fn(tri[1][0], tri[1][1]),
+                   to_screen_fn(tri[2][0], tri[2][1])]
+            # Skip degenerate triangles
+            if pts[0] == pts[1] or pts[1] == pts[2] or pts[0] == pts[2]:
+                continue
+            # Quick bounds check - at least one vertex in panel
+            if any(ox - 50 <= x <= ox + pw + 50 and oy - 50 <= y <= oy + ph + 50 for x, y in pts):
+                draw.polygon(pts, fill=fill, outline=fill)
 
     def _draw_top_view(self, draw, ice_np, pen_np, bx, by, bz,
                        blade_dir, lean, ox, oy, pw, ph):
@@ -216,12 +226,12 @@ class ParticleRenderer:
                     g = int(50 + 50 * depth_frac)
                     draw.point((sx, sy), fill=(g, g, int(g * 1.2)))
 
-        # Draw blade mesh silhouette (already in blade-local: X=along, Y=thickness)
-        if self._mesh_hull_xy is not None:
+        # Draw blade mesh (exact triangles, already in blade-local: X=along, Y=thickness)
+        if self._mesh_tris_xy is not None:
             def mesh_to_screen(along, across):
                 return to_screen_local(along, across)
-            self._draw_mesh_silhouette(draw, self._mesh_hull_xy, mesh_to_screen,
-                                       ox, oy, pw, ph)
+            self._draw_mesh_triangles(draw, self._mesh_tris_xy, mesh_to_screen,
+                                      ox, oy, pw, ph)
         else:
             # Fallback: horizontal line
             half_l = BLADE_LEN / 2
@@ -289,12 +299,12 @@ class ParticleRenderer:
                         g = int(40 + 60 * depth_frac)
                         draw.point((sx, sy), fill=(g, g, int(g * 1.2)))
 
-        # Draw blade mesh silhouette (side view: X=along, Z=height)
-        if self._mesh_hull_xz is not None:
+        # Draw blade mesh (exact triangles, side view: X=along, Z=height)
+        if self._mesh_tris_xz is not None:
             def mesh_to_screen(along, height):
                 return to_screen(along, bz + height)
-            self._draw_mesh_silhouette(draw, self._mesh_hull_xz, mesh_to_screen,
-                                       ox, oy, pw, ph)
+            self._draw_mesh_triangles(draw, self._mesh_tris_xz, mesh_to_screen,
+                                      ox, oy, pw, ph)
         else:
             # Fallback
             half_l = BLADE_LEN / 2
@@ -375,8 +385,8 @@ class ParticleRenderer:
                         g = int(40 + 60 * depth_frac)
                         draw.point((sx, sy), fill=(g, g, int(g * 1.2)))
 
-        # Draw blade mesh silhouette (front view: Y=thickness, Z=height)
-        if self._mesh_hull_yz is not None:
+        # Draw blade mesh (exact triangles, front view: Y=thickness, Z=height)
+        if self._mesh_tris_yz is not None:
             cos_lean = math.cos(lean)
             sin_lean = math.sin(lean)
 
@@ -385,8 +395,8 @@ class ParticleRenderer:
                 rotated_y = thickness * cos_lean - height * sin_lean
                 rotated_z = thickness * sin_lean + height * cos_lean
                 return to_screen(rotated_y, bz + rotated_z)
-            self._draw_mesh_silhouette(draw, self._mesh_hull_yz, mesh_to_screen,
-                                       ox, oy, pw, ph)
+            self._draw_mesh_triangles(draw, self._mesh_tris_yz, mesh_to_screen,
+                                      ox, oy, pw, ph)
         else:
             # Fallback: vertical line
             edge_z = bz - 0.75 * math.cos(lean)

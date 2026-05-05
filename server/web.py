@@ -357,7 +357,7 @@ async def viz_handler(request):
 
         function startSim() {
             send({cmd: 'reset_blade_position'});
-            setTimeout(() => send({cmd: 'start_penetration'}), 500);
+            send({cmd: 'start_penetration'});
             isRunning = true;
             updateButtons();
         }
