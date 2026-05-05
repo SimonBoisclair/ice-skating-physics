@@ -28,7 +28,7 @@ BLADE_H   = BLADE_H_REAL   * SCALE  # 1.5
 # ─── Ice particle field (tight box around blade contact zone) ───
 ICE_L = 0.300 * SCALE   # 300 mm → 15.0 scaled
 ICE_W = 0.025 * SCALE   # 25 mm  → 1.25 scaled (handles lean sweep up to 45°)
-ICE_H = 0.002 * SCALE   # 2 mm   → 0.1 scaled
+ICE_H = 0.005 * SCALE   # 5 mm   → 0.25 scaled
 N_ICE = 240_000
 
 # ─── Physics parameters ───

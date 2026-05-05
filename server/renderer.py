@@ -267,12 +267,22 @@ class ParticleRenderer:
         # Ice surface line
         x_left = ox + margin
         x_right = ox + pw - margin
-        draw.line([(x_left, surface_y), (x_right, surface_y)], fill=(60, 120, 180), width=1)
-        draw.text((x_left, surface_y + 2), "ice surface", fill=(60, 120, 180), font=self.font_small)
+        draw.line([(x_left, surface_y), (x_right, surface_y)], fill=(60, 120, 180), width=2)
+        draw.text((x_left, surface_y - 14), "ice surface", fill=(60, 120, 180), font=self.font_small)
 
-        # Ice volume
+        # Ice particle pool band (5mm deep, gradient)
         sy_floor = surface_y + int(ICE_H * scale)
-        draw.rectangle([x_left, surface_y, x_right, sy_floor], fill=(25, 35, 50))
+        pool_height = sy_floor - surface_y
+        for row in range(pool_height):
+            depth_frac = row / max(1, pool_height)
+            r = int(20 + 15 * (1 - depth_frac))
+            g = int(40 + 30 * (1 - depth_frac))
+            b = int(70 + 40 * (1 - depth_frac))
+            draw.line([(x_left, surface_y + row), (x_right, surface_y + row)], fill=(r, g, b))
+
+        # Pool floor line
+        draw.line([(x_left, sy_floor), (x_right, sy_floor)], fill=(40, 80, 120), width=1)
+        draw.text((x_right - 70, sy_floor + 2), "5mm deep", fill=(40, 80, 120), font=self.font_small)
 
         # Particles projected along blade axis
         cos_b = math.cos(blade_dir)
@@ -296,8 +306,10 @@ class ParticleRenderer:
                         draw.point((sx, sy), fill=COLOR_LUT[ci])
                     else:
                         depth_frac = max(0, min(1, pz / ICE_H))
-                        g = int(40 + 60 * depth_frac)
-                        draw.point((sx, sy), fill=(g, g, int(g * 1.2)))
+                        r = int(50 * (1 - depth_frac))
+                        g_val = int(180 * (1 - depth_frac) + 40)
+                        b_val = int(200 - 80 * depth_frac)
+                        draw.point((sx, sy), fill=(r, g_val, b_val))
 
         # Draw blade mesh (exact triangles, side view: X=along, Z=height)
         if self._mesh_tris_xz is not None:
@@ -333,14 +345,17 @@ class ParticleRenderer:
         draw.text((ox + 5, oy + 3), "FRONT (Y-Z)", fill=LABEL_COLOR, font=self.font_small)
 
         margin = 15
+        legend_w = 30  # width reserved for depth legend on right side
+        view_pw = pw - legend_w  # panel width minus legend
+
         # Zoom to blade thickness + some surroundings
         view_w = BLADE_W * 40.0  # show wider area
         view_h = ICE_H * 10.0
-        scale_y = (pw - 2 * margin) / view_w
+        scale_y = (view_pw - 2 * margin) / view_w
         scale_z = (ph - 2 * margin) / view_h
         scale = min(scale_y, scale_z)
 
-        cx = ox + pw // 2
+        cx = ox + view_pw // 2
         surface_y = oy + int((ph - 2 * margin) * 0.3) + margin
 
         cos_b = math.cos(blade_dir)
@@ -351,15 +366,41 @@ class ParticleRenderer:
             sy = surface_y - (z - ICE_H) * scale
             return int(sx), int(sy)
 
-        # Ice surface
+        # Ice surface line
         x_left = ox + margin
-        x_right = ox + pw - margin
-        draw.line([(x_left, surface_y), (x_right, surface_y)], fill=(60, 120, 180), width=1)
-        draw.text((x_left, surface_y + 2), "ice surface", fill=(60, 120, 180), font=self.font_small)
+        x_right = ox + view_pw - margin
+        draw.line([(x_left, surface_y), (x_right, surface_y)], fill=(60, 120, 180), width=2)
+        draw.text((x_left, surface_y - 14), "ice surface (z=0)", fill=(60, 120, 180), font=self.font_small)
 
-        # Ice volume
+        # Ice particle pool band (5mm deep, colored gradient background)
         sy_floor = surface_y + int(ICE_H * scale)
-        draw.rectangle([x_left, surface_y, x_right, sy_floor], fill=(25, 35, 50))
+        pool_height = sy_floor - surface_y
+        for row in range(pool_height):
+            depth_frac = row / max(1, pool_height)
+            # Gradient from light blue (top/surface) to dark blue (bottom/deep)
+            r = int(20 + 15 * (1 - depth_frac))
+            g = int(40 + 30 * (1 - depth_frac))
+            b = int(70 + 40 * (1 - depth_frac))
+            draw.line([(x_left, surface_y + row), (x_right, surface_y + row)], fill=(r, g, b))
+
+        # Pool floor line
+        draw.line([(x_left, sy_floor), (x_right, sy_floor)], fill=(40, 80, 120), width=1)
+        draw.text((x_left, sy_floor + 2), "pool floor (5mm)", fill=(40, 80, 120), font=self.font_small)
+
+        # Depth legend on the right side of panel
+        leg_x = ox + view_pw + 2
+        leg_top = surface_y
+        leg_bot = sy_floor
+        leg_height = leg_bot - leg_top
+        if leg_height > 10:
+            draw.text((leg_x, leg_top - 14), "0mm", fill=LABEL_COLOR, font=self.font_small)
+            draw.text((leg_x, leg_bot + 2), "5mm", fill=LABEL_COLOR, font=self.font_small)
+            # Draw color bar
+            for row in range(leg_height):
+                depth_frac = row / leg_height
+                ci = min(255, int(depth_frac * 255))
+                color = COLOR_LUT[ci]
+                draw.line([(leg_x, leg_top + row), (leg_x + 12, leg_top + row)], fill=color)
 
         # Particles projected perpendicular to blade
         n = len(ice_np)
@@ -375,15 +416,18 @@ class ParticleRenderer:
             # Only show particles near blade center (within blade length)
             if abs(along) < BLADE_LEN * 0.3:
                 sx, sy = to_screen(across, pz)
-                if ox <= sx <= ox + pw and oy <= sy <= oy + ph:
+                if ox <= sx <= ox + view_pw and oy <= sy <= oy + ph:
                     pen_val = pen_np[i]
                     if pen_val > 0:
                         ci = min(255, int(pen_val / max_pen * 255))
                         draw.point((sx, sy), fill=COLOR_LUT[ci])
                     else:
                         depth_frac = max(0, min(1, pz / ICE_H))
-                        g = int(40 + 60 * depth_frac)
-                        draw.point((sx, sy), fill=(g, g, int(g * 1.2)))
+                        # Distinct depth colors: cyan (surface) -> blue (mid) -> dark blue (deep)
+                        r = int(50 * (1 - depth_frac))
+                        g_val = int(180 * (1 - depth_frac) + 40)
+                        b_val = int(200 - 80 * depth_frac)
+                        draw.point((sx, sy), fill=(r, g_val, b_val))
 
         # Draw blade mesh (exact triangles, front view: Y=thickness, Z=height)
         if self._mesh_tris_yz is not None:
