@@ -647,3 +647,7 @@ class BladePhysics:
                 print("[cmd] Starting penetration calculation")
             else:
                 print("[cmd] WARNING: Reset blade position first")
+
+        elif t == 'pause':
+            self.physics_paused = True
+            print("[cmd] Physics paused")

@@ -243,15 +243,59 @@ async def viz_handler(request):
             background: #1a2030;
             color: #c8d0dc;
             border: 1px solid #2a3040;
-            padding: 6px 16px;
+            padding: 8px 20px;
             border-radius: 4px;
             font-family: inherit;
             font-size: 12px;
             cursor: pointer;
+            transition: background 0.15s;
         }
         button:hover { background: #252d40; }
+        button.play {
+            background: #1a3a25;
+            border-color: #2a5a3a;
+            color: #6fdb8f;
+            font-size: 14px;
+            padding: 10px 28px;
+        }
+        button.play:hover { background: #254a32; }
+        button.stop {
+            background: #3a1a1a;
+            border-color: #5a2a2a;
+            color: #db6f6f;
+        }
+        button.stop:hover { background: #4a2525; }
+        button.reset {
+            background: #1a2a3a;
+            border-color: #2a3a5a;
+            color: #6faadb;
+        }
+        button.reset:hover { background: #253550; }
+        button:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
         a { color: #5a8abf; text-decoration: none; }
         a:hover { text-decoration: underline; }
+        .sim-controls {
+            margin-top: 15px;
+            display: flex;
+            gap: 12px;
+            align-items: center;
+        }
+        .sim-status {
+            font-size: 11px;
+            color: #6a7080;
+            margin-left: 10px;
+        }
+        .sim-status.running { color: #6fdb8f; }
+        .sim-status.paused { color: #dba86f; }
+        .bottom-controls {
+            margin-top: 10px;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
     </style>
 </head>
 <body>
@@ -260,22 +304,93 @@ async def viz_handler(request):
     <div class="stream-container">
         <img id="stream" src="/stream" alt="Particle stream loading..." />
     </div>
+    <div class="sim-controls">
+        <button class="play" id="btnPlay" onclick="startSim()">&#9654; Play</button>
+        <button class="stop" id="btnPause" onclick="pauseSim()" disabled>&#9632; Pause</button>
+        <button class="reset" id="btnReset" onclick="resetSim()">&#8634; Reset</button>
+        <span class="sim-status paused" id="simStatus">Paused</span>
+    </div>
     <p class="status" id="status">Connecting...</p>
-    <div class="controls">
-        <button onclick="document.getElementById('stream').src='/stream?t='+Date.now()">Reconnect</button>
+    <div class="bottom-controls">
+        <button onclick="document.getElementById('stream').src='/stream?t='+Date.now()">Reconnect Stream</button>
         <a href="/sandbox">Open Sandbox</a>
     </div>
     <script>
         const img = document.getElementById('stream');
         const status = document.getElementById('status');
+        const simStatus = document.getElementById('simStatus');
+        const btnPlay = document.getElementById('btnPlay');
+        const btnPause = document.getElementById('btnPause');
+        let ws = null;
+        let isRunning = false;
+
+        function connectWs() {
+            const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            ws = new WebSocket(proto + '//' + location.host + '/ws');
+            ws.onopen = () => {
+                status.textContent = 'Connected - streaming';
+                status.className = 'status connected';
+            };
+            ws.onclose = () => {
+                status.textContent = 'WebSocket disconnected - reconnecting...';
+                status.className = 'status';
+                setTimeout(connectWs, 2000);
+            };
+            ws.onmessage = (e) => {
+                try {
+                    const state = JSON.parse(e.data);
+                    if (state.physics_paused !== undefined) {
+                        isRunning = !state.physics_paused;
+                        updateButtons();
+                    }
+                } catch(err) {}
+            };
+        }
+
+        function send(cmd) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify(cmd));
+            }
+        }
+
+        function startSim() {
+            send({cmd: 'reset_blade_position'});
+            setTimeout(() => send({cmd: 'start_penetration'}), 500);
+            isRunning = true;
+            updateButtons();
+        }
+
+        function pauseSim() {
+            send({cmd: 'pause'});
+            isRunning = false;
+            updateButtons();
+        }
+
+        function resetSim() {
+            send({cmd: 'reset'});
+            isRunning = false;
+            updateButtons();
+        }
+
+        function updateButtons() {
+            btnPlay.disabled = isRunning;
+            btnPause.disabled = !isRunning;
+            simStatus.textContent = isRunning ? 'Running' : 'Paused';
+            simStatus.className = 'sim-status ' + (isRunning ? 'running' : 'paused');
+        }
+
         img.onload = () => {
-            status.textContent = 'Connected - streaming';
-            status.className = 'status connected';
+            if (!status.className.includes('connected')) {
+                status.textContent = 'Connected - streaming';
+                status.className = 'status connected';
+            }
         };
         img.onerror = () => {
-            status.textContent = 'Disconnected - click Reconnect';
+            status.textContent = 'Stream disconnected - click Reconnect';
             status.className = 'status';
         };
+
+        connectWs();
     </script>
 </body>
 </html>
