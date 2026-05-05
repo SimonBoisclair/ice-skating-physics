@@ -94,6 +94,7 @@ class BladePhysics:
                           ICE_L, ICE_W, ICE_H, 42],
                   device="cuda:0")
         wp.synchronize()
+        self._rotate_ice_to_blade()
 
         print("[physics] Settling ice particles...", flush=True)
         self.recenter_seed = 1000
@@ -120,16 +121,32 @@ class BladePhysics:
         self.physics_paused = True  # Start paused, wait for user to click buttons
         self.blade_at_surface = False  # True after reset_blade_position
 
+    def _rotate_ice_to_blade(self):
+        """Rotate ice particle positions to align the pool with blade direction."""
+        blade_dir = self.yaw + self.alpha
+        if abs(blade_dir) < 0.01:
+            return  # No rotation needed
+        cos_d = math.cos(blade_dir)
+        sin_d = math.sin(blade_dir)
+        ice_np = self.ice_pos.numpy()
+        # Rotate (x, y) around blade center
+        dx = ice_np[:, 0] - self.pos[0]
+        dy = ice_np[:, 1] - self.pos[1]
+        ice_np[:, 0] = self.pos[0] + dx * cos_d - dy * sin_d
+        ice_np[:, 1] = self.pos[1] + dx * sin_d + dy * cos_d
+        self.ice_pos = wp.array(ice_np, dtype=wp.vec3, device="cuda:0")
+
     # ── particle physics step ─────────────────────────────────────
 
     def _step_particles(self):
         """Run one physics sub-step on all ice particles."""
         self.recenter_seed += 1
+        blade_dir_f = float(self.yaw + self.alpha)
         wp.launch(recenter_ice, dim=N_ICE,
                   inputs=[self.ice_pos, self.ice_vel,
                           float(self.pos[0]), float(self.pos[1]),
                           N_ICE, ICE_L, ICE_W, ICE_H,
-                          self.recenter_seed],
+                          self.recenter_seed, blade_dir_f],
                   device="cuda:0")
 
         self.blade_force.zero_()
@@ -192,6 +209,7 @@ class BladePhysics:
                           self.recenter_seed + self.frame],
                   device="cuda:0")
         wp.synchronize()
+        self._rotate_ice_to_blade()
         
         # Reset force accumulators
         self.blade_force.zero_()
@@ -234,6 +252,7 @@ class BladePhysics:
                           self.recenter_seed + self.frame],
                   device="cuda:0")
         wp.synchronize()
+        self._rotate_ice_to_blade()
 
         best_pen, best_cnt, best_sum = 0.0, 0, 0.0
         for _ in range(steps):
@@ -628,6 +647,7 @@ class BladePhysics:
                               N_ICE, ICE_L, ICE_W, ICE_H, 42],
                       device="cuda:0")
             wp.synchronize()
+            self._rotate_ice_to_blade()
             self.physics_paused = True
             self.blade_at_surface = False
             print("[cmd] RESET complete")

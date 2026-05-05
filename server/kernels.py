@@ -46,8 +46,10 @@ def recenter_ice(
     ice_w: float,
     ice_h: float,
     seed_offset: int,
+    blade_dir: float,
 ):
-    """Wrap particles that stray too far from the blade back to the other side."""
+    """Wrap particles that stray too far from the blade back to the other side.
+    Checks bounds in blade-local frame (along/across blade direction)."""
     i = wp.tid()
     if i >= n:
         return
@@ -55,28 +57,36 @@ def recenter_ice(
     dx = p[0] - blade_cx
     dy = p[1] - blade_cy
 
+    # Project into blade-local frame
+    cos_b = wp.cos(blade_dir)
+    sin_b = wp.sin(blade_dir)
+    along = dx * cos_b + dy * sin_b
+    across = -dx * sin_b + dy * cos_b
+
     half_l = ice_l / 2.0
     half_w = ice_w / 2.0
-    new_x = p[0]
-    new_y = p[1]
-    new_z = p[2]
+    new_along = along
+    new_across = across
     reset = False
 
-    if dx > half_l:
-        new_x = blade_cx - half_l + (dx - half_l)
+    if along > half_l:
+        new_along = -half_l + (along - half_l)
         reset = True
-    elif dx < -half_l:
-        new_x = blade_cx + half_l + (dx + half_l)
+    elif along < -half_l:
+        new_along = half_l + (along + half_l)
         reset = True
 
-    if dy > half_w:
-        new_y = blade_cy - half_w + (dy - half_w)
+    if across > half_w:
+        new_across = -half_w + (across - half_w)
         reset = True
-    elif dy < -half_w:
-        new_y = blade_cy + half_w + (dy + half_w)
+    elif across < -half_w:
+        new_across = half_w + (across + half_w)
         reset = True
 
     if reset:
+        # Convert back to world coords
+        new_x = blade_cx + new_along * cos_b - new_across * sin_b
+        new_y = blade_cy + new_along * sin_b + new_across * cos_b
         s = wp.rand_init(seed_offset, i)
         new_z = wp.randf(s, 0.0, ice_h)
         pos[i] = wp.vec3(new_x, new_y, new_z)
