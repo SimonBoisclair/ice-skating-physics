@@ -414,7 +414,7 @@ class ParticleRenderer:
         """Draw HUD info bar at bottom of frame."""
         y = y_start
         items = [
-            f"Frame: {self.frame_count}",
+            f"Frame: {physics.frame}",
             f"Mass: {physics.blade_mass:.0f}kg",
             f"Lean: {math.degrees(physics.lean):.1f}\u00b0",
             f"Pen: {physics.pen_max_mm:.3f}mm",
