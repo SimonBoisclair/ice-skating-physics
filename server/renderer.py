@@ -154,13 +154,13 @@ class ParticleRenderer:
 
     def _draw_top_view(self, draw, ice_np, pen_np, bx, by, bz,
                        blade_dir, lean, ox, oy, pw, ph):
-        """Top-down view (X horizontal, Y vertical)."""
+        """Top-down view in blade-local frame (along-blade horizontal, across-blade vertical)."""
         draw.rectangle([ox, oy, ox + pw, oy + ph], fill=(20, 22, 30))
-        draw.text((ox + 5, oy + 3), "TOP (X-Y)", fill=LABEL_COLOR, font=self.font_small)
+        draw.text((ox + 5, oy + 3), "TOP (along / across)", fill=LABEL_COLOR, font=self.font_small)
 
         margin = 15
-        view_l = ICE_L * 1.2
-        view_w = ICE_W * 5.0
+        view_l = ICE_L * 1.2   # along blade
+        view_w = ICE_W * 5.0   # across blade
         scale_x = (pw - 2 * margin) / view_l
         scale_y = (ph - 2 * margin) / view_w
         scale = min(scale_x, scale_y)
@@ -171,24 +171,41 @@ class ParticleRenderer:
         cos_b = math.cos(blade_dir)
         sin_b = math.sin(blade_dir)
 
-        def to_screen(x, y):
-            sx = cx + (x - bx) * scale
-            sy = cy - (y - by) * scale
+        def to_screen_local(along, across):
+            """Map blade-local (along, across) to screen pixels."""
+            sx = cx + along * scale
+            sy = cy - across * scale
             return int(sx), int(sy)
 
-        # Ice field boundary
-        x0, y0 = to_screen(bx - ICE_L/2, by - ICE_W/2)
-        x1, y1 = to_screen(bx + ICE_L/2, by + ICE_W/2)
-        draw.rectangle([x0, y1, x1, y0], outline=ICE_SURFACE_COLOR, width=1)
+        def world_to_local(px, py):
+            """Project world (px, py) into blade-local frame."""
+            dx = px - bx
+            dy = py - by
+            along = dx * cos_b + dy * sin_b
+            across = -dx * sin_b + dy * cos_b
+            return along, across
 
-        # Particles
+        # Ice field boundary (in blade-local frame)
+        # Pool is axis-aligned in world, so compute its corners in local frame
+        half_l = ICE_L / 2
+        half_w = ICE_W / 2
+        corners_world = [
+            (bx - half_l, by - half_w), (bx + half_l, by - half_w),
+            (bx + half_l, by + half_w), (bx - half_l, by + half_w),
+        ]
+        corners_local = [world_to_local(cx_w, cy_w) for cx_w, cy_w in corners_world]
+        screen_corners = [to_screen_local(a, c) for a, c in corners_local]
+        draw.polygon(screen_corners, outline=ICE_SURFACE_COLOR)
+
+        # Particles in blade-local frame
         n = len(ice_np)
         step = max(1, n // 25000)
         max_pen = max(float(pen_np.max()), 0.001)
 
         for i in range(0, n, step):
             px, py, pz = ice_np[i]
-            sx, sy = to_screen(px, py)
+            along, across = world_to_local(px, py)
+            sx, sy = to_screen_local(along, across)
             if ox <= sx <= ox + pw and oy <= sy <= oy + ph:
                 pen_val = pen_np[i]
                 if pen_val > 0:
@@ -199,24 +216,21 @@ class ParticleRenderer:
                     g = int(50 + 50 * depth_frac)
                     draw.point((sx, sy), fill=(g, g, int(g * 1.2)))
 
-        # Draw blade mesh silhouette (top view: X along, Y thickness)
+        # Draw blade mesh silhouette (already in blade-local: X=along, Y=thickness)
         if self._mesh_hull_xy is not None:
             def mesh_to_screen(along, across):
-                # Transform from blade-local to world then to screen
-                wx = bx + along * cos_b - across * sin_b
-                wy = by + along * sin_b + across * cos_b
-                return to_screen(wx, wy)
+                return to_screen_local(along, across)
             self._draw_mesh_silhouette(draw, self._mesh_hull_xy, mesh_to_screen,
                                        ox, oy, pw, ph)
         else:
-            # Fallback: simple line
+            # Fallback: horizontal line
             half_l = BLADE_LEN / 2
-            x0s, y0s = to_screen(bx - half_l * cos_b, by - half_l * sin_b)
-            x1s, y1s = to_screen(bx + half_l * cos_b, by + half_l * sin_b)
+            x0s, y0s = to_screen_local(-half_l, 0)
+            x1s, y1s = to_screen_local(half_l, 0)
             draw.line([(x0s, y0s), (x1s, y1s)], fill=BLADE_COLOR, width=2)
 
         # Blade center marker
-        scx, scy = to_screen(bx, by)
+        scx, scy = to_screen_local(0, 0)
         draw.ellipse([scx-3, scy-3, scx+3, scy+3], fill=(255, 100, 100))
 
     def _draw_side_view(self, draw, ice_np, pen_np, bx, by, bz,
