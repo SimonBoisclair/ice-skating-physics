@@ -295,11 +295,11 @@ class BladePhysics:
     # ── main simulation step ──────────────────────────────────────
 
     def step(self):
-        self.frame += 1
-
         # If physics is paused, skip particle simulation but still return state
         if self.physics_paused:
             return self.get_state()
+
+        self.frame += 1
 
         # Push force
         fx, fy = 0.0, 0.0
