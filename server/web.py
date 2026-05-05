@@ -16,10 +16,13 @@ import numpy as np
 
 from .config import SCALE, BLADE_LEN, BLADE_W, BLADE_H, N_ICE, ICE_H
 from .physics import BladePhysics
+from .renderer import ParticleRenderer
 
 # ── global state ──────────────────────────────────────────────────
 physics: BladePhysics | None = None
 clients: set[web.WebSocketResponse] = set()
+renderer: ParticleRenderer | None = None
+stream_clients: set[web.StreamResponse] = set()
 
 
 # ── physics loop ──────────────────────────────────────────────────
@@ -27,6 +30,8 @@ clients: set[web.WebSocketResponse] = set()
 async def physics_loop():
     global physics
     physics = BladePhysics()
+    global renderer
+    renderer = ParticleRenderer()
     print(f"[server] Physics ready. {N_ICE} ice particles, {SCALE}x scale")
 
     frame = 0
@@ -45,6 +50,27 @@ async def physics_loop():
                     dead.append(ws)
             for ws in dead:
                 clients.discard(ws)
+
+        # Render MJPEG frame every 8th physics step (~30fps if physics is 250Hz)
+        if frame % 8 == 0 and stream_clients:
+            try:
+                jpeg_bytes = renderer.render_frame(physics)
+                dead_streams = []
+                for resp in stream_clients:
+                    try:
+                        await resp.write(
+                            b'--frame\r\n'
+                            b'Content-Type: image/jpeg\r\n'
+                            b'Content-Length: ' + str(len(jpeg_bytes)).encode() + b'\r\n'
+                            b'\r\n' + jpeg_bytes + b'\r\n'
+                        )
+                    except Exception:
+                        dead_streams.append(resp)
+                for resp in dead_streams:
+                    stream_clients.discard(resp)
+            except Exception as e:
+                if frame % 200 == 0:
+                    print(f"[stream] Render error: {e}")
 
         if frame % 500 == 0:
             elapsed = time.time() - t0
@@ -125,6 +151,138 @@ async def debug_mesh_handler(request):
     return web.json_response(response)
 
 
+async def stream_handler(request):
+    """MJPEG stream endpoint. Streams particle visualization as video."""
+    if physics is None:
+        return web.Response(text='Physics not initialized', status=503)
+
+    resp = web.StreamResponse(
+        status=200,
+        reason='OK',
+        headers={
+            'Content-Type': 'multipart/x-mixed-replace; boundary=frame',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'Access-Control-Allow-Origin': '*',
+        }
+    )
+    await resp.prepare(request)
+    stream_clients.add(resp)
+    print(f"[stream] Client connected ({len(stream_clients)} total)")
+
+    try:
+        # Keep connection alive until client disconnects
+        while True:
+            await asyncio.sleep(1)
+            if resp.task is None or resp.task.done():
+                break
+    except (asyncio.CancelledError, ConnectionResetError):
+        pass
+    finally:
+        stream_clients.discard(resp)
+        print(f"[stream] Client disconnected ({len(stream_clients)} total)")
+
+    return resp
+
+
+async def viz_handler(request):
+    """Serve the particle visualization page."""
+    html = """
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>GPU Particle Visualization</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #0a0a14;
+            color: #c8d0dc;
+            font-family: 'SF Mono', 'Menlo', 'Monaco', monospace;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        h1 {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 10px;
+            color: #e0e4ec;
+        }
+        .info {
+            font-size: 12px;
+            color: #8890a0;
+            margin-bottom: 15px;
+        }
+        .stream-container {
+            border: 1px solid #2a3040;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+        }
+        img {
+            display: block;
+            width: 960px;
+            height: 540px;
+            image-rendering: pixelated;
+        }
+        .status {
+            margin-top: 10px;
+            font-size: 11px;
+            color: #6a7080;
+        }
+        .status.connected { color: #4a9; }
+        .controls {
+            margin-top: 15px;
+            display: flex;
+            gap: 10px;
+        }
+        button {
+            background: #1a2030;
+            color: #c8d0dc;
+            border: 1px solid #2a3040;
+            padding: 6px 16px;
+            border-radius: 4px;
+            font-family: inherit;
+            font-size: 12px;
+            cursor: pointer;
+        }
+        button:hover { background: #252d40; }
+        a { color: #5a8abf; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <h1>GPU Particle Physics Stream</h1>
+    <p class="info">Live MJPEG stream of 240k ice particles from the GPU simulation</p>
+    <div class="stream-container">
+        <img id="stream" src="/stream" alt="Particle stream loading..." />
+    </div>
+    <p class="status" id="status">Connecting...</p>
+    <div class="controls">
+        <button onclick="document.getElementById('stream').src='/stream?t='+Date.now()">Reconnect</button>
+        <a href="/sandbox">Open Sandbox</a>
+    </div>
+    <script>
+        const img = document.getElementById('stream');
+        const status = document.getElementById('status');
+        img.onload = () => {
+            status.textContent = 'Connected - streaming';
+            status.className = 'status connected';
+        };
+        img.onerror = () => {
+            status.textContent = 'Disconnected - click Reconnect';
+            status.className = 'status';
+        };
+    </script>
+</body>
+</html>
+"""
+    return web.Response(text=html, content_type='text/html')
+
+
 # ── lifecycle hooks ───────────────────────────────────────────────
 
 async def start_background_tasks(app):
@@ -142,6 +300,8 @@ def run_server(host='0.0.0.0', port=8765):
     app.router.add_get('/', sandbox_handler)
     app.router.add_get('/sandbox', sandbox_handler)
     app.router.add_get('/debug_mesh', debug_mesh_handler)
+    app.router.add_get('/stream', stream_handler)
+    app.router.add_get('/viz', viz_handler)
     app.router.add_get('/ws', ws_handler)
 
     # Serve React build static assets
