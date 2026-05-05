@@ -104,7 +104,16 @@ async def ws_handler(request):
             if msg.type == aiohttp.WSMsgType.TEXT:
                 try:
                     cmd = json.loads(msg.data)
-                    physics.handle_command(cmd)
+                    # Camera commands go to renderer, physics commands to physics
+                    if cmd.get('cmd') == 'camera' and renderer is not None:
+                        if 'azimuth' in cmd:
+                            renderer.cam_azimuth = float(cmd['azimuth'])
+                        if 'elevation' in cmd:
+                            renderer.cam_elevation = float(cmd['elevation'])
+                        if 'distance' in cmd:
+                            renderer.cam_distance = float(cmd['distance'])
+                    else:
+                        physics.handle_command(cmd)
                 except Exception as e:
                     print(f"[ws] Bad command: {e}")
     finally:
@@ -192,155 +201,243 @@ async def stream_handler(request):
 
 
 async def viz_handler(request):
-    """Serve the particle visualization page."""
+    """Serve the particle visualization page with interactive camera controls."""
     html = """
 <!DOCTYPE html>
 <html>
 <head>
     <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>GPU Particle Visualization</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             background: #0a0a14;
             color: #c8d0dc;
-            font-family: 'SF Mono', 'Menlo', 'Monaco', monospace;
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Mono', 'Menlo', monospace;
             display: flex;
             flex-direction: column;
             align-items: center;
             min-height: 100vh;
-            padding: 20px;
+            min-height: 100dvh;
+            padding: 10px;
+            overflow-x: hidden;
+            touch-action: none;
         }
-        h1 {
-            font-size: 18px;
-            font-weight: 600;
-            margin-bottom: 10px;
-            color: #e0e4ec;
-        }
-        .info {
-            font-size: 12px;
-            color: #8890a0;
-            margin-bottom: 15px;
-        }
+        h1 { font-size: 16px; font-weight: 600; margin-bottom: 6px; color: #e0e4ec; }
+        .info { font-size: 11px; color: #8890a0; margin-bottom: 10px; text-align: center; }
         .stream-container {
             border: 1px solid #2a3040;
             border-radius: 8px;
             overflow: hidden;
             box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+            position: relative;
+            cursor: grab;
+            touch-action: none;
+            width: 100%;
+            max-width: 1280px;
         }
-        img {
+        .stream-container:active { cursor: grabbing; }
+        #stream {
             display: block;
-            width: 1280px;
-            height: 720px;
-            max-width: 95vw;
+            width: 100%;
             height: auto;
-            image-rendering: pixelated;
+            aspect-ratio: 16/9;
+            image-rendering: auto;
+            pointer-events: none;
+            -webkit-user-drag: none;
+            user-select: none;
         }
-        .status {
+        .cam-hint {
+            position: absolute;
+            bottom: 8px;
+            right: 8px;
+            font-size: 10px;
+            color: rgba(200,210,220,0.6);
+            background: rgba(10,10,20,0.7);
+            padding: 3px 8px;
+            border-radius: 4px;
+            pointer-events: none;
+        }
+        .controls-row {
             margin-top: 10px;
-            font-size: 11px;
-            color: #6a7080;
-        }
-        .status.connected { color: #4a9; }
-        .controls {
-            margin-top: 15px;
             display: flex;
-            gap: 10px;
+            gap: 8px;
+            align-items: center;
+            flex-wrap: wrap;
+            justify-content: center;
         }
         button {
             background: #1a2030;
             color: #c8d0dc;
             border: 1px solid #2a3040;
-            padding: 8px 20px;
-            border-radius: 4px;
+            padding: 10px 18px;
+            border-radius: 6px;
             font-family: inherit;
-            font-size: 12px;
+            font-size: 13px;
             cursor: pointer;
             transition: background 0.15s;
+            -webkit-tap-highlight-color: transparent;
         }
         button:hover { background: #252d40; }
-        button.play {
-            background: #1a3a25;
-            border-color: #2a5a3a;
-            color: #6fdb8f;
-            font-size: 14px;
-            padding: 10px 28px;
-        }
+        button:active { background: #303848; }
+        button.play { background: #1a3a25; border-color: #2a5a3a; color: #6fdb8f; }
         button.play:hover { background: #254a32; }
-        button.stop {
-            background: #3a1a1a;
-            border-color: #5a2a2a;
-            color: #db6f6f;
-        }
+        button.stop { background: #3a1a1a; border-color: #5a2a2a; color: #db6f6f; }
         button.stop:hover { background: #4a2525; }
-        button.reset {
-            background: #1a2a3a;
-            border-color: #2a3a5a;
-            color: #6faadb;
-        }
+        button.reset { background: #1a2a3a; border-color: #2a3a5a; color: #6faadb; }
         button.reset:hover { background: #253550; }
-        button:disabled {
-            opacity: 0.4;
-            cursor: not-allowed;
-        }
-        a { color: #5a8abf; text-decoration: none; }
-        a:hover { text-decoration: underline; }
-        .sim-controls {
-            margin-top: 15px;
-            display: flex;
-            gap: 12px;
-            align-items: center;
-        }
-        .sim-status {
-            font-size: 11px;
-            color: #6a7080;
-            margin-left: 10px;
-        }
+        button:disabled { opacity: 0.4; cursor: not-allowed; }
+        .sim-status { font-size: 11px; color: #6a7080; margin-left: 6px; }
         .sim-status.running { color: #6fdb8f; }
         .sim-status.paused { color: #dba86f; }
-        .bottom-controls {
-            margin-top: 10px;
-            display: flex;
-            gap: 10px;
-            align-items: center;
+        .status { margin-top: 6px; font-size: 10px; color: #6a7080; }
+        .status.connected { color: #4a9; }
+        a { color: #5a8abf; text-decoration: none; font-size: 12px; }
+        a:hover { text-decoration: underline; }
+        @media (max-width: 600px) {
+            body { padding: 5px; }
+            h1 { font-size: 14px; }
+            .info { font-size: 10px; margin-bottom: 6px; }
+            button { padding: 12px 14px; font-size: 14px; }
         }
     </style>
 </head>
 <body>
     <h1>GPU Particle Physics Stream</h1>
-    <p class="info">Live MJPEG stream of 240k ice particles from the GPU simulation</p>
-    <div class="stream-container">
-        <img id="stream" src="/stream" alt="Particle stream loading..." />
+    <p class="info">Drag to orbit &bull; Scroll/pinch to zoom &bull; 240k particles live</p>
+    <div class="stream-container" id="viewport">
+        <img id="stream" src="/stream" alt="Loading..." />
+        <div class="cam-hint" id="camHint">Drag to orbit</div>
     </div>
-    <div class="sim-controls">
+    <div class="controls-row">
         <button class="play" id="btnPlay" onclick="startSim()">&#9654; Play</button>
         <button class="stop" id="btnPause" onclick="pauseSim()" disabled>&#9632; Pause</button>
         <button class="reset" id="btnReset" onclick="resetSim()">&#8634; Reset</button>
         <span class="sim-status paused" id="simStatus">Paused</span>
     </div>
-    <p class="status" id="status">Connecting...</p>
-    <div class="bottom-controls">
-        <button onclick="document.getElementById('stream').src='/stream?t='+Date.now()">Reconnect Stream</button>
+    <div class="controls-row">
+        <button onclick="document.getElementById('stream').src='/stream?t='+Date.now()">Reconnect</button>
         <a href="/sandbox">Open Sandbox</a>
     </div>
+    <p class="status" id="status">Connecting...</p>
     <script>
         const img = document.getElementById('stream');
+        const viewport = document.getElementById('viewport');
         const status = document.getElementById('status');
         const simStatus = document.getElementById('simStatus');
         const btnPlay = document.getElementById('btnPlay');
         const btnPause = document.getElementById('btnPause');
+        const camHint = document.getElementById('camHint');
         let ws = null;
         let isRunning = false;
 
+        // Camera state (orbit)
+        let camAz = 0.4;       // azimuth (radians)
+        let camEl = 0.6;       // elevation (radians)
+        let camDist = """ + str(BLADE_LEN * 1.5) + """;  // distance
+
+        const MIN_EL = 0.05;
+        const MAX_EL = 1.5;
+        const MIN_DIST = """ + str(BLADE_LEN * 0.3) + """;
+        const MAX_DIST = """ + str(BLADE_LEN * 5.0) + """;
+
+        function sendCamera() {
+            send({cmd: 'camera', azimuth: camAz, elevation: camEl, distance: camDist});
+        }
+
+        // ─── Mouse controls ───
+        let dragging = false;
+        let lastX = 0, lastY = 0;
+
+        viewport.addEventListener('mousedown', (e) => {
+            dragging = true;
+            lastX = e.clientX;
+            lastY = e.clientY;
+            e.preventDefault();
+        });
+        window.addEventListener('mousemove', (e) => {
+            if (!dragging) return;
+            const dx = e.clientX - lastX;
+            const dy = e.clientY - lastY;
+            lastX = e.clientX;
+            lastY = e.clientY;
+            camAz += dx * 0.005;
+            camEl = Math.max(MIN_EL, Math.min(MAX_EL, camEl + dy * 0.005));
+            sendCamera();
+        });
+        window.addEventListener('mouseup', () => { dragging = false; });
+
+        viewport.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            camDist = Math.max(MIN_DIST, Math.min(MAX_DIST, camDist * (1 + e.deltaY * 0.001)));
+            sendCamera();
+        }, {passive: false});
+
+        // ─── Touch controls ───
+        let touches = {};
+        let lastPinchDist = 0;
+
+        viewport.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            camHint.style.display = 'none';
+            for (const t of e.changedTouches) {
+                touches[t.identifier] = {x: t.clientX, y: t.clientY};
+            }
+            if (e.touches.length === 2) {
+                const [a, b] = [e.touches[0], e.touches[1]];
+                lastPinchDist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+            }
+        }, {passive: false});
+
+        viewport.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+            if (e.touches.length === 1) {
+                // Single finger: orbit
+                const t = e.touches[0];
+                const prev = touches[t.identifier];
+                if (prev) {
+                    const dx = t.clientX - prev.x;
+                    const dy = t.clientY - prev.y;
+                    camAz += dx * 0.006;
+                    camEl = Math.max(MIN_EL, Math.min(MAX_EL, camEl + dy * 0.006));
+                    sendCamera();
+                }
+                touches[t.identifier] = {x: t.clientX, y: t.clientY};
+            } else if (e.touches.length === 2) {
+                // Pinch: zoom
+                const [a, b] = [e.touches[0], e.touches[1]];
+                const dist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+                if (lastPinchDist > 0) {
+                    const scale = lastPinchDist / dist;
+                    camDist = Math.max(MIN_DIST, Math.min(MAX_DIST, camDist * scale));
+                    sendCamera();
+                }
+                lastPinchDist = dist;
+                for (const t of e.changedTouches) {
+                    touches[t.identifier] = {x: t.clientX, y: t.clientY};
+                }
+            }
+        }, {passive: false});
+
+        viewport.addEventListener('touchend', (e) => {
+            for (const t of e.changedTouches) {
+                delete touches[t.identifier];
+            }
+            lastPinchDist = 0;
+        });
+
+        // ─── WebSocket ───
         function connectWs() {
             const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
             ws = new WebSocket(proto + '//' + location.host + '/ws');
             ws.onopen = () => {
-                status.textContent = 'Connected - streaming';
+                status.textContent = 'Connected';
                 status.className = 'status connected';
+                sendCamera();  // sync camera state on connect
             };
             ws.onclose = () => {
-                status.textContent = 'WebSocket disconnected - reconnecting...';
+                status.textContent = 'Reconnecting...';
                 status.className = 'status';
                 setTimeout(connectWs, 2000);
             };
@@ -367,19 +464,16 @@ async def viz_handler(request):
             isRunning = true;
             updateButtons();
         }
-
         function pauseSim() {
             send({cmd: 'pause'});
             isRunning = false;
             updateButtons();
         }
-
         function resetSim() {
             send({cmd: 'reset'});
             isRunning = false;
             updateButtons();
         }
-
         function updateButtons() {
             btnPlay.disabled = isRunning;
             btnPause.disabled = !isRunning;
@@ -389,12 +483,12 @@ async def viz_handler(request):
 
         img.onload = () => {
             if (!status.className.includes('connected')) {
-                status.textContent = 'Connected - streaming';
+                status.textContent = 'Connected';
                 status.className = 'status connected';
             }
         };
         img.onerror = () => {
-            status.textContent = 'Stream disconnected - click Reconnect';
+            status.textContent = 'Stream lost - click Reconnect';
             status.className = 'status';
         };
 
