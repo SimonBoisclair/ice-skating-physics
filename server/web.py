@@ -246,8 +246,20 @@ async def viz_handler(request):
             image-rendering: auto;
             pointer-events: none;
             -webkit-user-drag: none;
+            -webkit-touch-callout: none;
             user-select: none;
         }
+        .touch-overlay {
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            z-index: 10;
+            touch-action: none;
+            -webkit-touch-callout: none;
+            -webkit-user-select: none;
+            user-select: none;
+            cursor: grab;
+        }
+        .touch-overlay:active { cursor: grabbing; }
         .cam-hint {
             position: absolute;
             bottom: 8px;
@@ -258,6 +270,7 @@ async def viz_handler(request):
             padding: 3px 8px;
             border-radius: 4px;
             pointer-events: none;
+            z-index: 11;
         }
         .controls-row {
             margin-top: 10px;
@@ -308,6 +321,7 @@ async def viz_handler(request):
     <p class="info">Drag to orbit &bull; Scroll/pinch to zoom &bull; 240k particles live</p>
     <div class="stream-container" id="viewport">
         <img id="stream" src="/stream" alt="Loading..." />
+        <div class="touch-overlay" id="touchOverlay"></div>
         <div class="cam-hint" id="camHint">Drag to orbit</div>
     </div>
     <div class="controls-row">
@@ -324,6 +338,7 @@ async def viz_handler(request):
     <script>
         const img = document.getElementById('stream');
         const viewport = document.getElementById('viewport');
+        const overlay = document.getElementById('touchOverlay');
         const status = document.getElementById('status');
         const simStatus = document.getElementById('simStatus');
         const btnPlay = document.getElementById('btnPlay');
@@ -350,7 +365,7 @@ async def viz_handler(request):
         let dragging = false;
         let lastX = 0, lastY = 0;
 
-        viewport.addEventListener('mousedown', (e) => {
+        overlay.addEventListener('mousedown', (e) => {
             dragging = true;
             lastX = e.clientX;
             lastY = e.clientY;
@@ -368,18 +383,19 @@ async def viz_handler(request):
         });
         window.addEventListener('mouseup', () => { dragging = false; });
 
-        viewport.addEventListener('wheel', (e) => {
+        overlay.addEventListener('wheel', (e) => {
             e.preventDefault();
             camDist = Math.max(MIN_DIST, Math.min(MAX_DIST, camDist * (1 + e.deltaY * 0.001)));
             sendCamera();
         }, {passive: false});
 
-        // ─── Touch controls ───
+        // ─── Touch controls (on overlay to avoid iOS img conflicts) ───
         let touches = {};
         let lastPinchDist = 0;
 
-        viewport.addEventListener('touchstart', (e) => {
+        overlay.addEventListener('touchstart', (e) => {
             e.preventDefault();
+            e.stopPropagation();
             camHint.style.display = 'none';
             for (const t of e.changedTouches) {
                 touches[t.identifier] = {x: t.clientX, y: t.clientY};
@@ -390,8 +406,9 @@ async def viz_handler(request):
             }
         }, {passive: false});
 
-        viewport.addEventListener('touchmove', (e) => {
+        overlay.addEventListener('touchmove', (e) => {
             e.preventDefault();
+            e.stopPropagation();
             if (e.touches.length === 1) {
                 // Single finger: orbit
                 const t = e.touches[0];
@@ -420,7 +437,7 @@ async def viz_handler(request):
             }
         }, {passive: false});
 
-        viewport.addEventListener('touchend', (e) => {
+        overlay.addEventListener('touchend', (e) => {
             for (const t of e.changedTouches) {
                 delete touches[t.identifier];
             }
