@@ -8,6 +8,7 @@ Usage:
 import asyncio
 import json
 import os
+import subprocess
 import time
 
 import aiohttp
@@ -29,6 +30,16 @@ physics: BladePhysics | None = None
 clients: set[web.WebSocketResponse] = set()
 renderer = None
 stream_clients: set[web.StreamResponse] = set()
+
+# Idle timeout: stop pod after 30 minutes of no clients
+IDLE_TIMEOUT_SECS = 30 * 60  # 30 minutes
+last_activity = time.time()
+
+
+def touch_activity():
+    """Update last-activity timestamp (call on any client interaction)."""
+    global last_activity
+    last_activity = time.time()
 
 
 # ── physics loop ──────────────────────────────────────────────────
@@ -97,6 +108,7 @@ async def ws_handler(request):
     ws = web.WebSocketResponse()
     await ws.prepare(request)
     clients.add(ws)
+    touch_activity()
     print(f"[ws] Client connected ({len(clients)} total)")
 
     try:
@@ -105,6 +117,7 @@ async def ws_handler(request):
                 try:
                     cmd = json.loads(msg.data)
                     # Camera commands go to renderer, physics commands to physics
+                    touch_activity()
                     if cmd.get('cmd') == 'camera' and renderer is not None:
                         if 'azimuth' in cmd:
                             renderer.cam_azimuth = float(cmd['azimuth'])
@@ -112,6 +125,8 @@ async def ws_handler(request):
                             renderer.cam_elevation = float(cmd['elevation'])
                         if 'distance' in cmd:
                             renderer.cam_distance = float(cmd['distance'])
+                        print(f"[cam] az={renderer.cam_azimuth:.3f} el={renderer.cam_elevation:.3f} d={renderer.cam_distance:.1f}")
+                        await ws.send_str(json.dumps({'ack': 'camera', 'az': renderer.cam_azimuth, 'el': renderer.cam_elevation, 'd': renderer.cam_distance}))
                     else:
                         physics.handle_command(cmd)
                 except Exception as e:
@@ -183,6 +198,7 @@ async def stream_handler(request):
     )
     await resp.prepare(request)
     stream_clients.add(resp)
+    touch_activity()
     print(f"[stream] Client connected ({len(stream_clients)} total)")
 
     try:
@@ -198,6 +214,25 @@ async def stream_handler(request):
         print(f"[stream] Client disconnected ({len(stream_clients)} total)")
 
     return resp
+
+
+async def frame_handler(request):
+    """Single JPEG frame endpoint for iOS/mobile polling."""
+    touch_activity()
+    if physics is None or renderer is None:
+        return web.Response(text='Not ready', status=503)
+    try:
+        t0 = time.time()
+        jpeg_bytes = renderer.render_frame(physics)
+        dt = (time.time() - t0) * 1000
+        print(f"[frame] render {dt:.0f}ms  cam=({renderer.cam_azimuth:.3f},{renderer.cam_elevation:.3f},{renderer.cam_distance:.1f})  size={len(jpeg_bytes)}")
+        return web.Response(
+            body=jpeg_bytes,
+            content_type='image/jpeg',
+            headers={'Cache-Control': 'no-cache, no-store', 'Pragma': 'no-cache'}
+        )
+    except Exception as e:
+        return web.Response(text=str(e), status=500)
 
 
 async def viz_handler(request):
@@ -308,11 +343,28 @@ async def viz_handler(request):
         .status.connected { color: #4a9; }
         a { color: #5a8abf; text-decoration: none; font-size: 12px; }
         a:hover { text-decoration: underline; }
+        #debugLog {
+            margin-top: 10px;
+            width: 100%;
+            max-width: 1280px;
+            height: 200px;
+            overflow-y: auto;
+            background: #0d0d1a;
+            border: 1px solid #2a3040;
+            border-radius: 6px;
+            padding: 8px;
+            font-size: 11px;
+            font-family: 'SF Mono', 'Menlo', monospace;
+            color: #8fbc8f;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
         @media (max-width: 600px) {
             body { padding: 5px; }
             h1 { font-size: 14px; }
             .info { font-size: 10px; margin-bottom: 6px; }
             button { padding: 12px 14px; font-size: 14px; }
+            #debugLog { height: 180px; font-size: 10px; }
         }
     </style>
 </head>
@@ -320,7 +372,7 @@ async def viz_handler(request):
     <h1>GPU Particle Physics Stream</h1>
     <p class="info">Drag to orbit &bull; Scroll/pinch to zoom &bull; 240k particles live</p>
     <div class="stream-container" id="viewport">
-        <img id="stream" src="/stream" alt="Loading..." />
+        <img id="stream" alt="Loading..." />
         <div class="touch-overlay" id="touchOverlay"></div>
         <div class="cam-hint" id="camHint">Drag to orbit</div>
     </div>
@@ -331,12 +383,61 @@ async def viz_handler(request):
         <span class="sim-status paused" id="simStatus">Paused</span>
     </div>
     <div class="controls-row">
-        <button onclick="document.getElementById('stream').src='/stream?t='+Date.now()">Reconnect</button>
+        <button id="btnReconnect" onclick="document.getElementById('stream').src='/stream?t='+Date.now()">Reconnect</button>
         <a href="/sandbox">Open Sandbox</a>
     </div>
     <p class="status" id="status">Connecting...</p>
+    <div style="margin:6px 0;"><button onclick="navigator.clipboard.writeText(dbg.innerText).then(()=>this.textContent='Copied!').catch(()=>{const ta=document.createElement('textarea');ta.value=dbg.innerText;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);this.textContent='Copied!'});setTimeout(()=>this.textContent='Copy Logs',1500)" style="padding:4px 12px;font-size:12px;background:#334;color:#aaa;border:1px solid #555;border-radius:4px;cursor:pointer">Copy Logs</button></div>
+    <div id="debugLog"></div>
     <script>
+        const dbg = document.getElementById('debugLog');
+        function log(msg) {
+            const line = document.createElement('div');
+            const ts = new Date().toLocaleTimeString('en', {hour12:false, hour:'2-digit', minute:'2-digit', second:'2-digit', fractionalSecondDigits:2});
+            line.textContent = ts + ' ' + msg;
+            dbg.appendChild(line);
+            dbg.scrollTop = dbg.scrollHeight;
+            if (dbg.children.length > 200) dbg.removeChild(dbg.firstChild);
+        }
+        log('Page loaded');
+
+        // iOS Safari doesn't support MJPEG streams — use frame polling instead
+        const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
         const img = document.getElementById('stream');
+        if (isMobile) {
+            log('[stream] Mobile — fetch polling mode');
+            document.getElementById('btnReconnect').style.display = 'none';
+            let frameNum = 0;
+            let busy = false;
+            async function pollFrame() {
+                if (busy) return;
+                busy = true;
+                try {
+                    const t0 = performance.now();
+                    const resp = await fetch('/frame?t=' + Date.now());
+                    if (resp.ok) {
+                        const blob = await resp.blob();
+                        const url = URL.createObjectURL(blob);
+                        const oldSrc = img.src;
+                        img.src = url;
+                        if (oldSrc && oldSrc.startsWith('blob:')) URL.revokeObjectURL(oldSrc);
+                        frameNum++;
+                        const dt = (performance.now() - t0).toFixed(0);
+                        log('[stream] frame ' + frameNum + ' size=' + blob.size + ' dt=' + dt + 'ms');
+                    } else {
+                        log('[stream] frame resp ' + resp.status);
+                    }
+                } catch(e) {
+                    log('[stream] error: ' + e.message);
+                }
+                busy = false;
+                setTimeout(pollFrame, 16);
+            }
+            pollFrame();
+        } else {
+            log('[stream] Desktop — MJPEG stream');
+            img.src = '/stream';
+        }
         const viewport = document.getElementById('viewport');
         const overlay = document.getElementById('touchOverlay');
         const status = document.getElementById('status');
@@ -348,7 +449,7 @@ async def viz_handler(request):
         let isRunning = false;
 
         // Camera state (orbit)
-        let camAz = 0.4;       // azimuth (radians)
+        let camAz = 1.5708;    // azimuth (radians, π/2 = side view)
         let camEl = 0.6;       // elevation (radians)
         let camDist = """ + str(BLADE_LEN * 1.5) + """;  // distance
 
@@ -358,6 +459,7 @@ async def viz_handler(request):
         const MAX_DIST = """ + str(BLADE_LEN * 5.0) + """;
 
         function sendCamera() {
+            log('[cam] send az=' + camAz.toFixed(3) + ' el=' + camEl.toFixed(3) + ' d=' + camDist.toFixed(1) + ' ws=' + (ws ? ws.readyState : 'null'));
             send({cmd: 'camera', azimuth: camAz, elevation: camEl, distance: camDist});
         }
 
@@ -366,6 +468,7 @@ async def viz_handler(request):
         let lastX = 0, lastY = 0;
 
         overlay.addEventListener('mousedown', (e) => {
+            log('[cam] mousedown ' + e.clientX + ',' + e.clientY);
             dragging = true;
             lastX = e.clientX;
             lastY = e.clientY;
@@ -394,15 +497,18 @@ async def viz_handler(request):
         let lastPinchDist = 0;
 
         overlay.addEventListener('touchstart', (e) => {
+            log('[cam] touchstart fingers=' + e.touches.length + ' target=' + e.target.className);
             e.preventDefault();
             e.stopPropagation();
             camHint.style.display = 'none';
             for (const t of e.changedTouches) {
                 touches[t.identifier] = {x: t.clientX, y: t.clientY};
+                log('[cam]   touch id=' + t.identifier + ' x=' + t.clientX.toFixed(0) + ' y=' + t.clientY.toFixed(0));
             }
             if (e.touches.length === 2) {
                 const [a, b] = [e.touches[0], e.touches[1]];
                 lastPinchDist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+                log('[cam] pinch start dist=' + lastPinchDist.toFixed(1));
             }
         }, {passive: false});
 
@@ -416,9 +522,12 @@ async def viz_handler(request):
                 if (prev) {
                     const dx = t.clientX - prev.x;
                     const dy = t.clientY - prev.y;
+                    log('[cam] touchmove orbit dx=' + dx.toFixed(1) + ' dy=' + dy.toFixed(1));
                     camAz += dx * 0.006;
                     camEl = Math.max(MIN_EL, Math.min(MAX_EL, camEl + dy * 0.006));
                     sendCamera();
+                } else {
+                    log('[cam] touchmove NO prev for id=' + t.identifier);
                 }
                 touches[t.identifier] = {x: t.clientX, y: t.clientY};
             } else if (e.touches.length === 2) {
@@ -438,6 +547,7 @@ async def viz_handler(request):
         }, {passive: false});
 
         overlay.addEventListener('touchend', (e) => {
+            log('[cam] touchend fingers=' + e.touches.length);
             for (const t of e.changedTouches) {
                 delete touches[t.identifier];
             }
@@ -449,11 +559,13 @@ async def viz_handler(request):
             const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
             ws = new WebSocket(proto + '//' + location.host + '/ws');
             ws.onopen = () => {
+                log('[ws] Connected');
                 status.textContent = 'Connected';
                 status.className = 'status connected';
                 sendCamera();  // sync camera state on connect
             };
-            ws.onclose = () => {
+            ws.onclose = (ev) => {
+                log('[ws] Closed code=' + ev.code + ' reason=' + ev.reason);
                 status.textContent = 'Reconnecting...';
                 status.className = 'status';
                 setTimeout(connectWs, 2000);
@@ -461,6 +573,9 @@ async def viz_handler(request):
             ws.onmessage = (e) => {
                 try {
                     const state = JSON.parse(e.data);
+                    if (state.ack === 'camera') {
+                        log('[ws] server ack cam az=' + state.az.toFixed(3) + ' el=' + state.el.toFixed(3) + ' d=' + state.d.toFixed(1));
+                    }
                     if (state.physics_paused !== undefined) {
                         isRunning = !state.physics_paused;
                         updateButtons();
@@ -519,12 +634,58 @@ async def viz_handler(request):
 
 # ── lifecycle hooks ───────────────────────────────────────────────
 
+async def idle_watchdog():
+    """Stop the RunPod pod after IDLE_TIMEOUT_SECS of no client activity."""
+    while True:
+        await asyncio.sleep(60)
+        idle_secs = time.time() - last_activity
+        has_clients = len(clients) > 0 or len(stream_clients) > 0
+        if has_clients:
+            touch_activity()
+            continue
+        remaining = IDLE_TIMEOUT_SECS - idle_secs
+        if remaining > 0:
+            if remaining < 300:  # log when < 5 min left
+                print(f"[idle] No clients for {idle_secs/60:.0f}m, sleeping in {remaining/60:.1f}m")
+            continue
+        print(f"[idle] No activity for {idle_secs/60:.0f} minutes — stopping pod")
+        try:
+            subprocess.run(['runpodctl', 'stop', 'pod'], timeout=30)
+            print("[idle] runpodctl stop pod succeeded")
+        except FileNotFoundError:
+            print("[idle] runpodctl not found, using API fallback")
+            pod_id = os.environ.get('RUNPOD_POD_ID')
+            api_key = os.environ.get('RUNPOD_API_KEY')
+            if pod_id and api_key:
+                try:
+                    import urllib.request
+                    query = json.dumps({
+                        'query': f'mutation {{ podStop(input: {{podId: "{pod_id}"}}) {{ id }} }}'
+                    })
+                    req = urllib.request.Request(
+                        'https://api.runpod.io/graphql',
+                        data=query.encode(),
+                        headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {api_key}'},
+                    )
+                    urllib.request.urlopen(req, timeout=30)
+                    print("[idle] API stop succeeded")
+                except Exception as e:
+                    print(f"[idle] API stop failed: {e}")
+            else:
+                print("[idle] No RUNPOD_POD_ID/RUNPOD_API_KEY — cannot stop pod")
+        except Exception as e:
+            print(f"[idle] Stop failed: {e}")
+        break
+
+
 async def start_background_tasks(app):
     app['physics_task'] = asyncio.ensure_future(physics_loop())
+    app['idle_task'] = asyncio.ensure_future(idle_watchdog())
 
 
 async def cleanup_background_tasks(app):
     app['physics_task'].cancel()
+    app['idle_task'].cancel()
 
 
 # ── entry point ───────────────────────────────────────────────────
@@ -535,6 +696,7 @@ def run_server(host='0.0.0.0', port=8765):
     app.router.add_get('/sandbox', sandbox_handler)
     app.router.add_get('/debug_mesh', debug_mesh_handler)
     app.router.add_get('/stream', stream_handler)
+    app.router.add_get('/frame', frame_handler)
     app.router.add_get('/viz', viz_handler)
     app.router.add_get('/ws', ws_handler)
 

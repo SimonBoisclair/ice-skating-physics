@@ -49,7 +49,7 @@ class WarpParticleRenderer:
         self._mesh_faces = None
 
         # Orbit camera state (controllable from browser)
-        self.cam_azimuth = 0.4      # radians, horizontal angle
+        self.cam_azimuth = 1.5708   # radians, horizontal angle (π/2 = side view)
         self.cam_elevation = 0.6    # radians, vertical angle (0=level, pi/2=top)
         self.cam_distance = BLADE_LEN * 1.5  # distance from target
         self.cam_target = [0.0, 0.0, ICE_H * 0.5]  # look-at point
@@ -141,8 +141,10 @@ class WarpParticleRenderer:
         if d > 0:
             dx /= d; dy /= d; dz /= d
 
-        self._renderer._camera_pos = (cam_x, cam_y, cam_z)
-        self._renderer._camera_front = (dx, dy, dz)
+        self._renderer.update_view_matrix(
+            cam_pos=(cam_x, cam_y, cam_z),
+            cam_front=(dx, dy, dz),
+        )
 
         sim_time = self.frame_count * 0.033
         self._renderer.begin_frame(sim_time)
@@ -189,6 +191,16 @@ class WarpParticleRenderer:
         pixels = glReadPixels(0, 0, WIDTH, HEIGHT, GL_RGB, GL_UNSIGNED_BYTE)
         img_data = np.frombuffer(pixels, dtype=np.uint8).reshape(HEIGHT, WIDTH, 3)[::-1]
 
+        pil_img = Image.fromarray(img_data)
+        # Overlay camera values as text for debugging
+        try:
+            from PIL import ImageDraw, ImageFont
+            draw = ImageDraw.Draw(pil_img)
+            cam_text = f"az={self.cam_azimuth:.3f} el={self.cam_elevation:.3f} d={self.cam_distance:.1f} f={self.frame_count}"
+            draw.rectangle([(5, 5), (450, 25)], fill=(0, 0, 0))
+            draw.text((8, 7), cam_text, fill=(255, 255, 0))
+        except Exception:
+            pass
         buf = io.BytesIO()
-        Image.fromarray(img_data).save(buf, format='JPEG', quality=80)
+        pil_img.save(buf, format='JPEG', quality=80)
         return buf.getvalue()
