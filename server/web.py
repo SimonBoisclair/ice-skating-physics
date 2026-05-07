@@ -649,13 +649,16 @@ async def idle_watchdog():
                 print(f"[idle] No clients for {idle_secs/60:.0f}m, sleeping in {remaining/60:.1f}m")
             continue
         print(f"[idle] No activity for {idle_secs/60:.0f} minutes — stopping pod")
+        pod_id = os.environ.get('RUNPOD_POD_ID')
+        api_key = os.environ.get('RUNPOD_API_KEY')
         try:
-            subprocess.run(['runpodctl', 'stop', 'pod'], timeout=30)
+            if pod_id:
+                subprocess.run(['runpodctl', 'stop', 'pod', pod_id], timeout=30, check=True)
+            else:
+                subprocess.run(['runpodctl', 'stop', 'pod', '--all'], timeout=30, check=True)
             print("[idle] runpodctl stop pod succeeded")
-        except FileNotFoundError:
-            print("[idle] runpodctl not found, using API fallback")
-            pod_id = os.environ.get('RUNPOD_POD_ID')
-            api_key = os.environ.get('RUNPOD_API_KEY')
+        except (FileNotFoundError, subprocess.CalledProcessError) as e:
+            print(f"[idle] runpodctl failed ({e}), using API fallback")
             if pod_id and api_key:
                 try:
                     import urllib.request
