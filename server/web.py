@@ -31,8 +31,8 @@ clients: set[web.WebSocketResponse] = set()
 renderer = None
 stream_clients: set[web.StreamResponse] = set()
 
-# Idle timeout: stop pod after 30 minutes of no clients
-IDLE_TIMEOUT_SECS = 30 * 60  # 30 minutes
+# Idle timeout: stop pod after 10 minutes of no clients
+IDLE_TIMEOUT_SECS = 10 * 60  # 10 minutes
 last_activity = time.time()
 
 
