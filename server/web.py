@@ -307,6 +307,34 @@ async def viz_handler(request):
             pointer-events: none;
             z-index: 11;
         }
+        .camera-controller {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            z-index: 20;
+            display: grid;
+            grid-template-columns: repeat(3, 34px);
+            gap: 4px;
+            padding: 6px;
+            background: rgba(10,10,20,0.72);
+            border: 1px solid rgba(120,140,180,0.35);
+            border-radius: 8px;
+            backdrop-filter: blur(4px);
+            pointer-events: auto;
+        }
+        .camera-controller button {
+            width: 34px;
+            height: 30px;
+            padding: 0;
+            font-size: 12px;
+            line-height: 1;
+            position: relative;
+            z-index: 21;
+        }
+        .camera-controller .wide {
+            grid-column: span 3;
+            width: 100%;
+        }
         .controls-row {
             margin-top: 10px;
             display: flex;
@@ -370,11 +398,22 @@ async def viz_handler(request):
 </head>
 <body>
     <h1>GPU Particle Physics Stream</h1>
-    <p class="info">Drag to orbit &bull; Scroll/pinch to zoom &bull; 240k particles live</p>
+    <p class="info">Use camera buttons &bull; Scroll/pinch to zoom &bull; 240k particles live</p>
     <div class="stream-container" id="viewport">
         <img id="stream" alt="Loading..." />
         <div class="touch-overlay" id="touchOverlay"></div>
-        <div class="cam-hint" id="camHint">Drag to orbit</div>
+        <div class="camera-controller">
+            <button onclick="moveCamera(0, 0.12)">Up</button>
+            <button onclick="zoomCamera(0.85)">In</button>
+            <button onclick="setCameraPreset('top')">Top</button>
+            <button onclick="moveCamera(-0.18, 0)">Left</button>
+            <button onclick="setCameraPreset('above')">Home</button>
+            <button onclick="moveCamera(0.18, 0)">Right</button>
+            <button onclick="setCameraPreset('side')">Side</button>
+            <button onclick="zoomCamera(1.18)">Out</button>
+            <button onclick="moveCamera(0, -0.12)">Down</button>
+        </div>
+        <div class="cam-hint" id="camHint">Camera controls</div>
     </div>
     <div class="controls-row">
         <button class="play" id="btnPlay" onclick="startSim()">&#9654; Play</button>
@@ -450,18 +489,49 @@ async def viz_handler(request):
 
         // Camera state (orbit)
         let camAz = 1.5708;    // azimuth (radians, π/2 = side view)
-        let camEl = 0.6;       // elevation (radians)
+        let camEl = 1.3;       // elevation (radians)
         let camDist = """ + str(BLADE_LEN * 1.5) + """;  // distance
-
-        const MIN_EL = 0.05;
-        const MAX_EL = 1.5;
-        const MIN_DIST = """ + str(BLADE_LEN * 0.3) + """;
-        const MAX_DIST = """ + str(BLADE_LEN * 5.0) + """;
 
         function sendCamera() {
             log('[cam] send az=' + camAz.toFixed(3) + ' el=' + camEl.toFixed(3) + ' d=' + camDist.toFixed(1) + ' ws=' + (ws ? ws.readyState : 'null'));
             send({cmd: 'camera', azimuth: camAz, elevation: camEl, distance: camDist});
         }
+
+        function setCameraPreset(mode) {
+            if (mode === 'top') {
+                camAz = 1.5708;
+                camEl = 1.56;
+                camDist = 30.0;
+            } else if (mode === 'above') {
+                camAz = 1.5708;
+                camEl = 1.2;
+                camDist = 30.0;
+            } else if (mode === 'side') {
+                camAz = 1.5708;
+                camEl = 0.0;
+                camDist = 25.0;
+            } else if (mode === 'front') {
+                camAz = 0.0;
+                camEl = 0.35;
+                camDist = 25.0;
+            }
+            sendCamera();
+        }
+
+        function zoomCamera(factor) {
+            camDist *= factor;
+            sendCamera();
+        }
+
+        function moveCamera(deltaAz, deltaEl) {
+            camAz += deltaAz;
+            camEl += deltaEl;
+            sendCamera();
+        }
+
+        window.setCameraPreset = setCameraPreset;
+        window.zoomCamera = zoomCamera;
+        window.moveCamera = moveCamera;
 
         // ─── Mouse controls ───
         let dragging = false;
@@ -480,15 +550,15 @@ async def viz_handler(request):
             const dy = e.clientY - lastY;
             lastX = e.clientX;
             lastY = e.clientY;
-            camAz += dx * 0.005;
-            camEl = Math.max(MIN_EL, Math.min(MAX_EL, camEl + dy * 0.005));
+            camAz -= dx * 0.005;
+            camEl -= dy * 0.005;
             sendCamera();
         });
         window.addEventListener('mouseup', () => { dragging = false; });
 
         overlay.addEventListener('wheel', (e) => {
             e.preventDefault();
-            camDist = Math.max(MIN_DIST, Math.min(MAX_DIST, camDist * (1 + e.deltaY * 0.001)));
+            camDist *= 1 + e.deltaY * 0.001;
             sendCamera();
         }, {passive: false});
 
@@ -523,8 +593,8 @@ async def viz_handler(request):
                     const dx = t.clientX - prev.x;
                     const dy = t.clientY - prev.y;
                     log('[cam] touchmove orbit dx=' + dx.toFixed(1) + ' dy=' + dy.toFixed(1));
-                    camAz += dx * 0.006;
-                    camEl = Math.max(MIN_EL, Math.min(MAX_EL, camEl + dy * 0.006));
+                    camAz -= dx * 0.006;
+                    camEl -= dy * 0.006;
                     sendCamera();
                 } else {
                     log('[cam] touchmove NO prev for id=' + t.identifier);
@@ -536,7 +606,7 @@ async def viz_handler(request):
                 const dist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
                 if (lastPinchDist > 0) {
                     const scale = lastPinchDist / dist;
-                    camDist = Math.max(MIN_DIST, Math.min(MAX_DIST, camDist * scale));
+                    camDist *= scale;
                     sendCamera();
                 }
                 lastPinchDist = dist;
@@ -629,7 +699,7 @@ async def viz_handler(request):
 </body>
 </html>
 """
-    return web.Response(text=html, content_type='text/html')
+    return web.Response(text=html, content_type='text/html', headers={'Cache-Control': 'no-cache, no-store, must-revalidate', 'Pragma': 'no-cache', 'Expires': '0'})
 
 
 # ── lifecycle hooks ───────────────────────────────────────────────

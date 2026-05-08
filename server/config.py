@@ -26,7 +26,7 @@ BLADE_W   = BLADE_W_REAL   * SCALE  # 0.15
 BLADE_H   = BLADE_H_REAL   * SCALE  # 1.5
 
 # ─── Ice particle field (tight box around blade contact zone) ───
-ICE_L = 0.300 * SCALE   # 300 mm → 15.0 scaled
+ICE_L = 0.250 * SCALE   # 250 mm → 12.5 scaled (matches CAD pool groove)
 ICE_W = 0.025 * SCALE   # 25 mm  → 1.25 scaled (handles lean sweep up to 45°)
 ICE_H = 0.005 * SCALE   # 5 mm   → 0.25 scaled (particle pool depth)
 ICE_SHEET = 0.015 * SCALE  # 15 mm → 0.75 scaled (total ice sheet thickness)
