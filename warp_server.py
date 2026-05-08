@@ -5,10 +5,9 @@ Entry point — delegates to server package.
 
 See server/ for the modular source:
   config.py          Constants
-  kernels.py         GPU kernels
-  blade_mesh.py      STL loading
-  blade_geometry.py  Contact geometry
-  physics.py         Simulation
+  kernels.py         GPU particle kernels
+  particle_sim.py    Particles-only pool simulation
+  renderer_warp.py   CAD + particle renderer
   web.py             HTTP + WebSocket
 """
 from server.web import run_server

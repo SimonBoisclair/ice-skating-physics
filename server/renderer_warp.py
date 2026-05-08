@@ -21,7 +21,7 @@ from warp.render import OpenGLRenderer  # noqa: E402
 from OpenGL.GL import glReadPixels, GL_RGB, GL_UNSIGNED_BYTE  # noqa: E402
 from PIL import Image  # noqa: E402
 
-from .config import SCALE, ICE_L, ICE_W, ICE_H, ICE_SHEET, BLADE_LEN, BLADE_W, BLADE_H  # noqa: E402
+from .config import SCALE, ICE_L, ICE_W, ICE_H, ICE_SHEET, PARTICLE_R  # noqa: E402
 
 WIDTH = 1280
 HEIGHT = 720
@@ -50,12 +50,11 @@ class WarpParticleRenderer:
         self._ice_sheet_verts, self._ice_sheet_faces, self._pool_bottom_verts, self._pool_bottom_faces = self._build_ice_sheet_mesh()
 
         # Orbit camera state (controllable from browser)
-        self.cam_azimuth = 1.5708   # radians, horizontal angle (π/2 = side view)
-        self.cam_elevation = 1.4    # radians, vertical angle (0=level, pi/2=top)
-        self.cam_distance = BLADE_LEN * 1.5  # distance from target
+        self.cam_azimuth = 0.076
+        self.cam_elevation = 1.305
+        self.cam_distance = 21.0
         self.cam_target = [0.0, 0.0, ICE_H * 0.5]  # look-at point
 
-        cam_dist = BLADE_LEN * 1.5
         self._renderer = OpenGLRenderer(
             screen_width=WIDTH,
             screen_height=HEIGHT,
@@ -67,7 +66,7 @@ class WarpParticleRenderer:
             near_plane=0.01,
             far_plane=100.0,
             camera_fov=40.0,
-            camera_pos=(0.0, ICE_H + BLADE_H * 4.0, cam_dist),
+            camera_pos=(0.0, ICE_H + 6.0, 21.0),
             camera_front=(0.0, -0.3, -1.0),
             camera_up=(0.0, 1.0, 0.0),
             up_axis="Z",
@@ -88,10 +87,12 @@ class WarpParticleRenderer:
             m = stl_mesh.Mesh.from_file(stl_path)
             raw = m.vectors.reshape(-1, 3).copy()
 
-            # STL pool center at (150,150)mm, pool bottom at z=10mm
-            raw[:, 0] -= 150.0
-            raw[:, 1] -= 150.0
-            raw[:, 2] -= 10.0
+            min_xyz = raw.min(axis=0)
+            max_xyz = raw.max(axis=0)
+            center_xy = (min_xyz[:2] + max_xyz[:2]) / 2.0
+            raw[:, 0] -= center_xy[0]
+            raw[:, 1] -= center_xy[1]
+            raw[:, 2] -= max_xyz[2]
 
             # Swap x<->y: STL has width along x, length along y
             # Sim convention: x=length (along blade), y=width
@@ -102,24 +103,17 @@ class WarpParticleRenderer:
             # Scale mm -> sim units
             scale_factor = SCALE / 1000.0
             raw *= scale_factor
+            raw[:, 2] += ICE_H
 
-            # Vertices: 84 (28 tri x 3), faces: sequential indices
+            raw_tris = raw.reshape(-1, 3, 3)
+            raw = np.concatenate([raw_tris, raw_tris[:, ::-1, :]], axis=0).reshape(-1, 3)
+
+            # Vertices: one unique vertex per triangle corner, faces: sequential indices
             sheet_verts = raw.astype(np.float32)
             sheet_faces = np.arange(len(sheet_verts), dtype=np.int32)
 
-            # Pool bottom: flat quad at z=0 for visual distinction
-            pool_l = ICE_L
-            pool_w = ICE_W
-            xp0, xp1 = -pool_l / 2.0, pool_l / 2.0
-            yp0, yp1 = -pool_w / 2.0, pool_w / 2.0
-            pool_verts = np.array([
-                (xp0, yp0, 0.0), (xp1, yp0, 0.0),
-                (xp1, yp1, 0.0), (xp0, yp1, 0.0),
-            ], dtype=np.float32)
-            pool_faces = np.array([0, 1, 2, 0, 2, 3], dtype=np.int32)
-
             print(f"[warp-renderer] Loaded CAD ice sheet: {len(m.vectors)} tris")
-            return sheet_verts, sheet_faces, pool_verts, pool_faces
+            return sheet_verts, sheet_faces, None, None
 
         except Exception as e:
             print(f"[warp-renderer] STL load failed ({e}), using procedural mesh")
@@ -191,6 +185,23 @@ class WarpParticleRenderer:
         self._mesh_loaded = True
         print(f"[warp-renderer] Mesh loaded: {len(self._mesh_verts)} verts, {len(self._mesh_faces)} tris")
 
+    def _build_cube_mesh(self, center, size):
+        cx, cy, cz = center
+        h = size * 0.5
+        verts = np.array([
+            (cx - h, cy - h, cz - h), (cx + h, cy - h, cz - h), (cx + h, cy + h, cz - h), (cx - h, cy + h, cz - h),
+            (cx - h, cy - h, cz + h), (cx + h, cy - h, cz + h), (cx + h, cy + h, cz + h), (cx - h, cy + h, cz + h),
+        ], dtype=np.float32)
+        faces = np.array([
+            0, 2, 1, 0, 3, 2,
+            4, 5, 6, 4, 6, 7,
+            0, 1, 5, 0, 5, 4,
+            1, 2, 6, 1, 6, 5,
+            2, 3, 7, 2, 7, 6,
+            3, 0, 4, 3, 4, 7,
+        ], dtype=np.int32)
+        return verts, faces
+
     def _compute_colors(self, ice_np, pen_np):
         """Vectorized particle coloring: penetration → red ramp, rest → blue by depth."""
         n = len(ice_np)
@@ -220,10 +231,6 @@ class WarpParticleRenderer:
 
         ice_np = physics.ice_pos.numpy()
         pen_np = physics.pen_out.numpy()
-
-        bx, by, bz = physics.pos[0], physics.pos[1], physics.pos[2]
-        blade_dir = physics.yaw + physics.alpha
-        lean = physics.lean
 
         colors = self._compute_colors(ice_np, pen_np)
 
@@ -258,49 +265,30 @@ class WarpParticleRenderer:
             self._ice_sheet_faces,
             colors=(0.72, 0.9, 1.0),
         )
-        self._renderer.render_mesh(
-            "pool_bottom",
-            self._pool_bottom_verts,
-            self._pool_bottom_faces,
-            colors=(0.35, 0.62, 0.82),
-        )
+        if self._pool_bottom_verts is not None:
+            self._renderer.render_mesh(
+                "pool_bottom",
+                self._pool_bottom_verts,
+                self._pool_bottom_faces,
+                colors=(0.35, 0.62, 0.82),
+            )
 
         # Particles
-        # particle_radius = 0.0005 * SCALE  # ~0.025mm real (tiny dots)
-        # self._renderer.render_points(
-        #     "ice_particles",
-        #     ice_np,
-        #     radius=particle_radius,
-        #     colors=colors,
-        # )
+        particle_radius = PARTICLE_R
+        self._renderer.render_points(
+            "ice_particles",
+            ice_np,
+            radius=particle_radius,
+            colors=colors,
+        )
 
-        # Blade mesh
-        # if self._mesh_loaded:
-        #     # Transform mesh vertices to world position/orientation
-        #     sin_dir = math.sin(blade_dir)
-        #     cos_dir = math.cos(blade_dir)
-        #     cos_lean = math.cos(lean)
-        #     sin_lean = math.sin(lean)
-
-        #     verts = self._mesh_verts.copy()
-        #     # Apply lean rotation (around blade's X axis in local frame)
-        #     y_rot = verts[:, 1] * cos_lean - verts[:, 2] * sin_lean
-        #     z_rot = verts[:, 1] * sin_lean + verts[:, 2] * cos_lean
-        #     verts[:, 1] = y_rot
-        #     verts[:, 2] = z_rot
-
-        #     # Rotate to world frame (around Z axis)
-        #     x_w = bx + verts[:, 0] * cos_dir - verts[:, 1] * sin_dir
-        #     y_w = by + verts[:, 0] * sin_dir + verts[:, 1] * cos_dir
-        #     z_w = bz + verts[:, 2]
-
-        #     world_verts = np.column_stack([x_w, y_w, z_w]).astype(np.float32)
-        #     self._renderer.render_mesh(
-        #         "blade",
-        #         world_verts,
-        #         self._mesh_faces.flatten(),
-        #         colors=(0.75, 0.75, 0.85),
-        #     )
+        cube_verts, cube_faces = self._build_cube_mesh(physics.cube_pos.numpy()[0], physics.cube_size)
+        self._renderer.render_mesh(
+            "falling_cube",
+            cube_verts,
+            cube_faces,
+            colors=(1.0, 0.55, 0.12),
+        )
 
         self._renderer.end_frame()
 

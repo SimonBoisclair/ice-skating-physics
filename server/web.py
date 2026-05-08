@@ -15,18 +15,13 @@ import aiohttp
 from aiohttp import web
 import numpy as np
 
-from .config import SCALE, BLADE_LEN, BLADE_W, BLADE_H, N_ICE, ICE_H
-from .physics import BladePhysics
-# Try Warp 3D renderer first, fall back to PIL renderer
-try:
-    from .renderer_warp import WarpParticleRenderer as ParticleRenderer
-    print("[server] Using Warp OpenGL 3D renderer")
-except Exception as e:
-    from .renderer import ParticleRenderer
-    print(f"[server] Warp renderer unavailable ({e}), using PIL 2D renderer")
+from .config import SCALE, N_ICE
+from .particle_sim import ParticlePoolSimulation
+from .renderer_warp import WarpParticleRenderer as ParticleRenderer
+print("[server] Using Warp OpenGL 3D renderer")
 
 # ── global state ──────────────────────────────────────────────────
-physics: BladePhysics | None = None
+physics: ParticlePoolSimulation | None = None
 clients: set[web.WebSocketResponse] = set()
 renderer = None
 stream_clients: set[web.StreamResponse] = set()
@@ -46,7 +41,7 @@ def touch_activity():
 
 async def physics_loop():
     global physics
-    physics = BladePhysics()
+    physics = ParticlePoolSimulation()
     global renderer
     renderer = ParticleRenderer()
     print(f"[server] Physics ready. {N_ICE} ice particles, {SCALE}x scale")
@@ -109,7 +104,8 @@ async def ws_handler(request):
     await ws.prepare(request)
     clients.add(ws)
     touch_activity()
-    print(f"[ws] Client connected ({len(clients)} total)")
+    client_kind = request.query.get('client', 'unknown')
+    print(f"[ws] Client connected kind={client_kind} ({len(clients)} total)")
 
     try:
         async for msg in ws:
@@ -140,38 +136,17 @@ async def ws_handler(request):
 
 # ── HTTP route handlers ───────────────────────────────────────────
 
-async def sandbox_handler(request):
-    dist = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                        'sandbox-ui', 'dist', 'index.html')
-    return web.FileResponse(dist)
-
-
 async def debug_mesh_handler(request):
     """Return mesh + nearby particle data as JSON for debug visualisation."""
     if physics is None:
         return web.json_response({'error': 'Physics not initialized'}, status=503)
 
     ice_np = physics.ice_pos.numpy()
-    cx, cy, cz = physics.pos[0], physics.pos[1], physics.pos[2]
-    half_l = BLADE_LEN / 2.0
-    half_w = BLADE_W * 6.0
-
-    mask = (
-        (np.abs(ice_np[:, 0] - cx) < half_l * 1.5) &
-        (np.abs(ice_np[:, 1] - cy) < half_w) &
-        (ice_np[:, 2] < BLADE_H * 1.5)
-    )
-    near_particles = ice_np[mask]
 
     response = {
-        'blade_pos': [float(cx), float(cy), float(cz)],
-        'blade_yaw': float(physics.yaw + physics.alpha),
-        'blade_lean': float(physics.lean),
-        'collision_mode': 'mesh' if physics.blade_mesh is not None else 'box',
-        'hollow_radius_mm': round(physics.hollow_radius * 1000, 2),
-        'n_particles_near': int(mask.sum()),
+        'n_particles_sample': int(min(len(ice_np), 5000)),
         'n_particles_total': N_ICE,
-        'particles': near_particles.tolist(),
+        'particles': ice_np[:5000].tolist(),
         'scale': SCALE,
     }
 
@@ -186,6 +161,8 @@ async def stream_handler(request):
     if physics is None:
         return web.Response(text='Physics not initialized', status=503)
 
+    physics.handle_command({'cmd': 'reset_particles_only'})
+
     resp = web.StreamResponse(
         status=200,
         reason='OK',
@@ -197,21 +174,23 @@ async def stream_handler(request):
         }
     )
     await resp.prepare(request)
-    stream_clients.add(resp)
     touch_activity()
-    print(f"[stream] Client connected ({len(stream_clients)} total)")
+    print("[stream] Client connected")
 
     try:
-        # Keep connection alive until client disconnects
         while True:
-            await asyncio.sleep(1)
-            if resp.task is None or resp.task.done():
-                break
+            jpeg_bytes = renderer.render_frame(physics)
+            await resp.write(
+                b'--frame\r\n'
+                b'Content-Type: image/jpeg\r\n'
+                b'Content-Length: ' + str(len(jpeg_bytes)).encode() + b'\r\n'
+                b'\r\n' + jpeg_bytes + b'\r\n'
+            )
+            await asyncio.sleep(1 / 30)
     except (asyncio.CancelledError, ConnectionResetError):
         pass
     finally:
-        stream_clients.discard(resp)
-        print(f"[stream] Client disconnected ({len(stream_clients)} total)")
+        print("[stream] Client disconnected")
 
     return resp
 
@@ -423,7 +402,6 @@ async def viz_handler(request):
     </div>
     <div class="controls-row">
         <button id="btnReconnect" onclick="document.getElementById('stream').src='/stream?t='+Date.now()">Reconnect</button>
-        <a href="/sandbox">Open Sandbox</a>
     </div>
     <p class="status" id="status">Connecting...</p>
     <div style="margin:6px 0;"><button onclick="navigator.clipboard.writeText(dbg.innerText).then(()=>this.textContent='Copied!').catch(()=>{const ta=document.createElement('textarea');ta.value=dbg.innerText;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);this.textContent='Copied!'});setTimeout(()=>this.textContent='Copy Logs',1500)" style="padding:4px 12px;font-size:12px;background:#334;color:#aaa;border:1px solid #555;border-radius:4px;cursor:pointer">Copy Logs</button></div>
@@ -488,9 +466,9 @@ async def viz_handler(request):
         let isRunning = false;
 
         // Camera state (orbit)
-        let camAz = 1.5708;    // azimuth (radians, π/2 = side view)
-        let camEl = 1.3;       // elevation (radians)
-        let camDist = """ + str(BLADE_LEN * 1.5) + """;  // distance
+        let camAz = 0.076;
+        let camEl = 1.305;
+        let camDist = 21.0;
 
         function sendCamera() {
             log('[cam] send az=' + camAz.toFixed(3) + ' el=' + camEl.toFixed(3) + ' d=' + camDist.toFixed(1) + ' ws=' + (ws ? ws.readyState : 'null'));
@@ -627,11 +605,14 @@ async def viz_handler(request):
         // ─── WebSocket ───
         function connectWs() {
             const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-            ws = new WebSocket(proto + '//' + location.host + '/ws');
+            ws = new WebSocket(proto + '//' + location.host + '/ws?client=viz');
             ws.onopen = () => {
                 log('[ws] Connected');
                 status.textContent = 'Connected';
                 status.className = 'status connected';
+                send({cmd: 'reset_particles_only'});
+                isRunning = false;
+                updateButtons();
                 sendCamera();  // sync camera state on connect
             };
             ws.onclose = (ev) => {
@@ -661,8 +642,7 @@ async def viz_handler(request):
         }
 
         function startSim() {
-            send({cmd: 'reset_blade_position'});
-            send({cmd: 'start_penetration'});
+            send({cmd: 'start_particles_only'});
             isRunning = true;
             updateButtons();
         }
@@ -672,7 +652,7 @@ async def viz_handler(request):
             updateButtons();
         }
         function resetSim() {
-            send({cmd: 'reset'});
+            send({cmd: 'reset_particles_only'});
             isRunning = false;
             updateButtons();
         }
@@ -765,19 +745,12 @@ async def cleanup_background_tasks(app):
 
 def run_server(host='0.0.0.0', port=8765):
     app = web.Application()
-    app.router.add_get('/', sandbox_handler)
-    app.router.add_get('/sandbox', sandbox_handler)
+    app.router.add_get('/', viz_handler)
     app.router.add_get('/debug_mesh', debug_mesh_handler)
     app.router.add_get('/stream', stream_handler)
     app.router.add_get('/frame', frame_handler)
     app.router.add_get('/viz', viz_handler)
     app.router.add_get('/ws', ws_handler)
-
-    # Serve React build static assets
-    dist_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                            'sandbox-ui', 'dist')
-    if os.path.isdir(dist_dir):
-        app.router.add_static('/assets', os.path.join(dist_dir, 'assets'))
 
     app.on_startup.append(start_background_tasks)
     app.on_cleanup.append(cleanup_background_tasks)
