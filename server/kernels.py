@@ -11,7 +11,7 @@ from .config import G, ICE_RHO
 @wp.func
 def dem_contact_force(n: wp.vec3, v: wp.vec3, gap: float, k_n: float, k_d: float, k_f: float, k_mu: float):
     vn = wp.dot(n, v)
-    fn = -gap * k_n - wp.min(vn, 0.0) * k_d
+    fn = wp.max(-gap * k_n - vn * k_d, 0.0)
     vt = v - n * vn
     vs = wp.length(vt)
 
@@ -200,7 +200,7 @@ def physics_step_particles_only(
 
     c = cube_pos[0]
     cv = cube_vel[0]
-    cube_contact_d = particle_r * 0.5
+    cube_contact_d = particle_r
     closest_dist = cube_contact_d
     closest_normal = wp.vec3(0.0, 0.0, 1.0)
     for f in range(cube_face_count):
