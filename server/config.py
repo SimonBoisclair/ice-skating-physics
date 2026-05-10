@@ -3,11 +3,6 @@ Constants and simulation parameters.
 
 All "scaled" quantities = real_meters * SCALE.
 """
-import os
-
-# ─── Mesh / CAD ───
-STL_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                        "blade-holder-cad.stl")
 
 # ─── Scale factor ───
 SCALE = 50  # 1 m real → 50 sim-units

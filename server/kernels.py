@@ -11,7 +11,7 @@ from .config import G, ICE_RHO
 @wp.func
 def dem_contact_force(n: wp.vec3, v: wp.vec3, gap: float, k_n: float, k_d: float, k_f: float, k_mu: float):
     vn = wp.dot(n, v)
-    fn = wp.max(-gap * k_n - vn * k_d, 0.0)
+    fn = -gap * k_n - wp.min(vn, 0.0) * k_d
     vt = v - n * vn
     vs = wp.length(vt)
 
@@ -225,7 +225,17 @@ def physics_step_particles_only(
 
     if closest_dist < cube_contact_d:
         cube_pen = cube_contact_d - closest_dist
-        contact_force = dem_contact_force(closest_normal, v - cv, -cube_pen, cube_contact_stiffness, cube_contact_damping, cube_contact_friction, k_mu)
+        approach_vn = -wp.dot(closest_normal, cv)
+        fn_spring = cube_pen * cube_contact_stiffness
+        fn_damp = wp.max(approach_vn, 0.0) * cube_contact_damping
+        fn_cube = fn_spring + fn_damp
+        vt_cube = (v - cv) - closest_normal * wp.dot(closest_normal, v - cv)
+        vs_cube = wp.length(vt_cube)
+        vt_dir = vt_cube
+        if vs_cube > 1.0e-6:
+            vt_dir = vt_cube / vs_cube
+        ft_cube = wp.min(vs_cube * cube_contact_stiffness * 0.1, cube_contact_friction * fn_cube)
+        contact_force = closest_normal * fn_cube - vt_dir * ft_cube
         max_pen = wp.max(max_pen, cube_pen)
         force = force + contact_force
         wp.atomic_add(cube_force, 0, -contact_force[0])
