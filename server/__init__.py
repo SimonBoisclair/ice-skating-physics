@@ -1,12 +1,11 @@
 """
-Ice skating blade physics server — modular package.
+Particle pool CAD visualization server — modular package.
 
 Modules:
   config          Constants and simulation parameters
-  kernels         Warp GPU kernels (particle init, physics steps, reduction)
-  blade_mesh      STL mesh loading and transformation
-  blade_geometry  Rocker profile, hollow-grind cross-section, contact lookup table
-  physics         BladePhysics simulation class (state, settling, stepping, commands)
+  kernels         Warp GPU kernels for particle initialization and DEM contact
+  particle_sim    Particles-only pool simulation state and commands
+  renderer_warp   GPU CAD and particle stream renderer
   web             HTTP routes, WebSocket handler, physics loop
 """
 import warp as wp

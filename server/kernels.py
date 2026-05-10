@@ -1,12 +1,69 @@
 """
 Warp GPU kernels for ice-particle simulation.
 
-All kernels run on CUDA. They are compiled once at import time by Warp's
-JIT and then launched from BladePhysics._step_particles().
+All kernels run on CUDA. They are compiled once at import time by Warp's JIT.
 """
 import warp as wp
 
 from .config import G, ICE_RHO
+
+
+@wp.func
+def dem_contact_force(n: wp.vec3, v: wp.vec3, gap: float, k_n: float, k_d: float, k_f: float, k_mu: float):
+    vn = wp.dot(n, v)
+    fn = -gap * k_n - wp.min(vn, 0.0) * k_d
+    vt = v - n * vn
+    vs = wp.length(vt)
+
+    if vs > 1.0e-6:
+        vt = vt / vs
+
+    ft = wp.min(vs * k_f, k_mu * wp.abs(fn))
+    return n * fn - vt * ft
+
+
+@wp.func
+def closest_point_triangle(p: wp.vec3, a: wp.vec3, b: wp.vec3, c: wp.vec3):
+    ab = b - a
+    ac = c - a
+    ap = p - a
+    d1 = wp.dot(ab, ap)
+    d2 = wp.dot(ac, ap)
+    if d1 <= 0.0 and d2 <= 0.0:
+        return a
+
+    bp = p - b
+    d3 = wp.dot(ab, bp)
+    d4 = wp.dot(ac, bp)
+    if d3 >= 0.0 and d4 <= d3:
+        return b
+
+    vc = d1 * d4 - d3 * d2
+    if vc <= 0.0 and d1 >= 0.0 and d3 <= 0.0:
+        v = d1 / (d1 - d3)
+        return a + ab * v
+
+    cp = p - c
+    d5 = wp.dot(ab, cp)
+    d6 = wp.dot(ac, cp)
+    if d6 >= 0.0 and d5 <= d6:
+        return c
+
+    vb = d5 * d2 - d1 * d6
+    if vb <= 0.0 and d2 >= 0.0 and d6 <= 0.0:
+        w = d2 / (d2 - d6)
+        return a + ac * w
+
+    va = d3 * d6 - d5 * d4
+    if va <= 0.0 and (d4 - d3) >= 0.0 and (d5 - d6) >= 0.0:
+        w = (d4 - d3) / ((d4 - d3) + (d5 - d6))
+        return b + (c - b) * w
+
+    denom = 1.0 / (va + vb + vc)
+    v = vb * denom
+    w = vc * denom
+    return a + ab * v + ac * w
+
 
 # ────────────────────────────────────────────────────────────────────
 # Particle initialisation
@@ -36,307 +93,177 @@ def init_ice(
 
 
 @wp.kernel
-def recenter_ice(
+def init_ice_lattice(
     pos: wp.array(dtype=wp.vec3),
     vel: wp.array(dtype=wp.vec3),
-    blade_cx: float,
-    blade_cy: float,
     n: int,
     ice_l: float,
     ice_w: float,
     ice_h: float,
-    seed_offset: int,
-    blade_dir: float,
+    nx: int,
+    ny: int,
+    seed: int,
 ):
-    """Wrap particles that stray too far from the blade back to the other side.
-    Checks bounds in blade-local frame (along/across blade direction)."""
     i = wp.tid()
     if i >= n:
         return
-    p = pos[i]
-    dx = p[0] - blade_cx
-    dy = p[1] - blade_cy
 
-    # Project into blade-local frame
-    cos_b = wp.cos(blade_dir)
-    sin_b = wp.sin(blade_dir)
-    along = dx * cos_b + dy * sin_b
-    across = -dx * sin_b + dy * cos_b
+    layer = nx * ny
+    iz = i / layer
+    rem = i - iz * layer
+    iy = rem / nx
+    ix = rem - iy * nx
 
-    half_l = ice_l / 2.0
-    half_w = ice_w / 2.0
-    new_along = along
-    new_across = across
-    reset = False
+    sx = ice_l / float(nx)
+    sy = ice_w / float(ny)
+    nz = (n + layer - 1) / layer
+    sz = ice_h / float(nz)
 
-    if along > half_l:
-        new_along = -half_l + (along - half_l)
-        reset = True
-    elif along < -half_l:
-        new_along = half_l + (along + half_l)
-        reset = True
+    s1 = wp.rand_init(seed, i)
+    s2 = wp.rand_init(seed, i + n)
+    s3 = wp.rand_init(seed, i + 2 * n)
+    jitter_x = wp.randf(s1, -0.2, 0.2) * sx
+    jitter_y = wp.randf(s2, -0.2, 0.2) * sy
+    jitter_z = wp.randf(s3, -0.2, 0.2) * sz
 
-    if across > half_w:
-        new_across = -half_w + (across - half_w)
-        reset = True
-    elif across < -half_w:
-        new_across = half_w + (across + half_w)
-        reset = True
+    x = -ice_l * 0.5 + (float(ix) + 0.5) * sx + jitter_x
+    y = -ice_w * 0.5 + (float(iy) + 0.5) * sy + jitter_y
+    z = (float(iz) + 0.5) * sz + jitter_z
+    pos[i] = wp.vec3(x, y, z)
+    vel[i] = wp.vec3(0.0, 0.0, 0.0)
 
-    if reset:
-        # Convert back to world coords
-        new_x = blade_cx + new_along * cos_b - new_across * sin_b
-        new_y = blade_cy + new_along * sin_b + new_across * cos_b
-        s = wp.rand_init(seed_offset, i)
-        new_z = wp.randf(s, 0.0, ice_h)
-        pos[i] = wp.vec3(new_x, new_y, new_z)
-        vel[i] = wp.vec3(0.0, 0.0, 0.0)
-
-
-# ────────────────────────────────────────────────────────────────────
-# Physics step — mesh collision (real CAD geometry)
-# ────────────────────────────────────────────────────────────────────
 
 @wp.kernel
-def physics_step_mesh(
+def physics_step_particles_only(
+    grid: wp.uint64,
     pos: wp.array(dtype=wp.vec3),
     vel: wp.array(dtype=wp.vec3),
-    blade_cx: float,
-    blade_cy: float,
-    blade_cz: float,
-    blade_half_l: float,
-    blade_half_w: float,
-    blade_half_h: float,
-    blade_yaw: float,
-    blade_lean: float,
-    mesh_id: wp.uint64,
-    blade_fx_out: wp.array(dtype=wp.vec3),
-    pen_out: wp.array(dtype=float),
+    pen: wp.array(dtype=float),
+    cube_pos: wp.array(dtype=wp.vec3),
+    cube_vel: wp.array(dtype=wp.vec3),
+    cube_force: wp.array(dtype=float),
+    cube_verts: wp.array(dtype=wp.vec3),
+    cube_faces: wp.array(dtype=int),
+    cube_face_count: int,
     n: int,
     dt: float,
     stiffness: float,
-    damping: float,
     particle_r: float,
+    ice_l: float,
+    ice_w: float,
+    ice_h: float,
+    cube_size: float,
+    cube_contact_stiffness: float,
+    cube_contact_damping: float,
+    cube_contact_friction: float,
+    contact_damping: float,
 ):
-    """Transform particle → blade-local, query signed distance, push out."""
-    i = wp.tid()
+    tid = wp.tid()
+    if tid >= n:
+        return
+
+    i = wp.hash_grid_point_id(grid, tid)
     if i >= n:
         return
 
     p = pos[i]
     v = vel[i]
-    blade_pen = float(0.0)
-
     force = wp.vec3(0.0, 0.0, -G * ICE_RHO)
+    contact_d = 2.0 * particle_r
+    k_contact = stiffness
+    k_damp = contact_damping
+    k_friction = stiffness * 0.1
+    k_mu = 0.5
+    max_pen = 0.0
 
-    # Ground plane
     if p[2] < particle_r:
-        pen = particle_r - p[2]
-        force = force + wp.vec3(0.0, 0.0, pen * stiffness)
-        vt = wp.vec3(v[0], v[1], 0.0)
-        sp = wp.length(vt)
-        if sp > 1.0e-5:
-            fn = pen * stiffness
-            ff = wp.min(fn * 0.3, sp * damping)
-            force = force - wp.normalize(vt) * ff
+        floor_pen = particle_r - p[2]
+        max_pen = wp.max(max_pen, floor_pen)
+        force = force + dem_contact_force(wp.vec3(0.0, 0.0, 1.0), v, -floor_pen, k_contact, k_damp, k_friction, k_mu)
 
-    # Transform to blade-local frame
-    cos_y = wp.cos(blade_yaw)
-    sin_y = wp.sin(blade_yaw)
-    cos_l = wp.cos(blade_lean)
-    sin_l = wp.sin(blade_lean)
+    if p[0] < -ice_l * 0.5 + particle_r:
+        wall_pen = (-ice_l * 0.5 + particle_r) - p[0]
+        max_pen = wp.max(max_pen, wall_pen)
+        force = force + dem_contact_force(wp.vec3(1.0, 0.0, 0.0), v, -wall_pen, k_contact, k_damp, k_friction, k_mu)
+    if p[0] > ice_l * 0.5 - particle_r:
+        wall_pen = p[0] - (ice_l * 0.5 - particle_r)
+        max_pen = wp.max(max_pen, wall_pen)
+        force = force + dem_contact_force(wp.vec3(-1.0, 0.0, 0.0), v, -wall_pen, k_contact, k_damp, k_friction, k_mu)
+    if p[1] < -ice_w * 0.5 + particle_r:
+        wall_pen = (-ice_w * 0.5 + particle_r) - p[1]
+        max_pen = wp.max(max_pen, wall_pen)
+        force = force + dem_contact_force(wp.vec3(0.0, 1.0, 0.0), v, -wall_pen, k_contact, k_damp, k_friction, k_mu)
+    if p[1] > ice_w * 0.5 - particle_r:
+        wall_pen = p[1] - (ice_w * 0.5 - particle_r)
+        max_pen = wp.max(max_pen, wall_pen)
+        force = force + dem_contact_force(wp.vec3(0.0, -1.0, 0.0), v, -wall_pen, k_contact, k_damp, k_friction, k_mu)
 
-    dx = p[0] - blade_cx
-    dy = p[1] - blade_cy
-    dz = p[2] - blade_cz
+    c = cube_pos[0]
+    cv = cube_vel[0]
+    cube_contact_d = particle_r
+    closest_dist = cube_contact_d
+    closest_normal = wp.vec3(0.0, 0.0, 1.0)
+    for f in range(cube_face_count):
+        ia = cube_faces[f * 3 + 0]
+        ib = cube_faces[f * 3 + 1]
+        ic = cube_faces[f * 3 + 2]
+        a = cube_verts[ia] + c
+        b = cube_verts[ib] + c
+        tri_c = cube_verts[ic] + c
+        q = closest_point_triangle(p, a, b, tri_c)
+        delta_cube = p - q
+        dist_cube = wp.length(delta_cube)
+        if dist_cube < closest_dist:
+            if dist_cube > 1.0e-6:
+                closest_normal = delta_cube / dist_cube
+            else:
+                tri_n = wp.cross(b - a, tri_c - a)
+                tri_n_len = wp.length(tri_n)
+                if tri_n_len > 1.0e-6:
+                    closest_normal = tri_n / tri_n_len
+            closest_dist = dist_cube
 
-    lx  =  dx * cos_y + dy * sin_y
-    ly  = -dx * sin_y + dy * cos_y
-    lz  =  ly * sin_l + dz * cos_l
-    ly2 =  ly * cos_l - dz * sin_l
+    if closest_dist < cube_contact_d:
+        cube_pen = cube_contact_d - closest_dist
+        approach_vn = -wp.dot(closest_normal, cv)
+        fn_spring = cube_pen * cube_contact_stiffness
+        fn_damp = wp.max(approach_vn, 0.0) * cube_contact_damping
+        fn_cube = fn_spring + fn_damp
+        vt_cube = (v - cv) - closest_normal * wp.dot(closest_normal, v - cv)
+        vs_cube = wp.length(vt_cube)
+        vt_dir = vt_cube
+        if vs_cube > 1.0e-6:
+            vt_dir = vt_cube / vs_cube
+        ft_cube = wp.min(vs_cube * cube_contact_stiffness * 0.1, cube_contact_friction * fn_cube)
+        contact_force = closest_normal * fn_cube - vt_dir * ft_cube
+        max_pen = wp.max(max_pen, cube_pen)
+        force = force + contact_force
+        wp.atomic_add(cube_force, 0, -contact_force[0])
+        wp.atomic_add(cube_force, 1, -contact_force[1])
+        wp.atomic_add(cube_force, 2, -contact_force[2])
 
-    # Box pre-filter
-    margin = wp.max(particle_r * 3.0, 0.1)
-    sx = blade_half_l + margin
-    sy = blade_half_w + margin
-    sz = blade_half_h + margin
-
-    if wp.abs(lx) < sx and wp.abs(ly2) < sy and wp.abs(lz) < sz:
-        query_point = wp.vec3(lx, ly2, lz)
-        max_query_dist = 2.0
-
-        query = wp.mesh_query_point_sign_winding_number(mesh_id, query_point, max_query_dist)
-
-        if query.result:
-            closest = wp.mesh_eval_position(mesh_id, query.face, query.u, query.v)
-            delta = query_point - closest
+    neighbors = wp.hash_grid_query(grid, p, contact_d * 1.05)
+    for j in neighbors:
+        if j != i:
+            delta = p - pos[j]
             dist = wp.length(delta)
-            sign = query.sign
+            if dist > 1.0e-6 and dist < contact_d:
+                normal = delta / dist
+                vrel = v - vel[j]
+                gap = dist - contact_d
+                max_pen = wp.max(max_pen, -gap)
+                force = force + dem_contact_force(normal, vrel, gap, k_contact, k_damp, k_friction, k_mu)
 
-            signed_dist = dist * sign
-
-            if signed_dist < particle_r:
-                pen = particle_r - signed_dist
-                blade_pen = pen
-
-                max_pen = particle_r * 3.0
-                pen = wp.min(pen, max_pen)
-
-                if dist > 1.0e-6:
-                    normal = wp.normalize(delta) * sign
-                else:
-                    normal = wp.vec3(0.0, 0.0, 1.0)
-
-                # Anisotropic stiffness by surface-normal direction
-                nx = wp.abs(normal[0])
-                ny = wp.abs(normal[1])
-                nz = wp.abs(normal[2])
-
-                k_along   = stiffness * 0.002
-                k_lateral = stiffness
-                k_vertical = stiffness
-
-                total_n = nx + ny + nz + 1.0e-8
-                k_eff = (nx * k_along + ny * k_lateral + nz * k_vertical) / total_n
-
-                local_force = normal * pen * k_eff
-
-                # Rotate back to world frame
-                fy_world_local = local_force[1] * cos_l + local_force[2] * sin_l
-                fz_world_local = -local_force[1] * sin_l + local_force[2] * cos_l
-                fx_world = local_force[0] * cos_y - fy_world_local * sin_y
-                fy_world = local_force[0] * sin_y + fy_world_local * cos_y
-                fz_world = fz_world_local
-
-                world_force = wp.vec3(fx_world, fy_world, fz_world)
-                force = force + world_force
-                wp.atomic_add(blade_fx_out, 0, -world_force)
-
-    pen_out[i] = blade_pen
-
-    # Damping + integration
-    force = force - v * damping
     v_new = v + force * dt / ICE_RHO
     p_new = p + v_new * dt
+    p_new = wp.vec3(
+        wp.clamp(p_new[0], -ice_l * 0.5 + particle_r, ice_l * 0.5 - particle_r),
+        wp.clamp(p_new[1], -ice_w * 0.5 + particle_r, ice_w * 0.5 - particle_r),
+        wp.clamp(p_new[2], particle_r, ice_h - particle_r),
+    )
     vel[i] = v_new
     pos[i] = p_new
-
-
-# ────────────────────────────────────────────────────────────────────
-# Physics step — box collision (fallback when mesh unavailable)
-# ────────────────────────────────────────────────────────────────────
-
-@wp.kernel
-def physics_step(
-    pos: wp.array(dtype=wp.vec3),
-    vel: wp.array(dtype=wp.vec3),
-    blade_cx: float,
-    blade_cy: float,
-    blade_cz: float,
-    blade_half_l: float,
-    blade_half_w: float,
-    blade_half_h: float,
-    blade_yaw: float,
-    blade_lean: float,
-    blade_fx_out: wp.array(dtype=wp.vec3),
-    pen_out: wp.array(dtype=float),
-    n: int,
-    dt: float,
-    stiffness: float,
-    damping: float,
-    particle_r: float,
-):
-    i = wp.tid()
-    if i >= n:
-        return
-
-    p = pos[i]
-    v = vel[i]
-    blade_pen = float(0.0)
-
-    force = wp.vec3(0.0, 0.0, -G * ICE_RHO)
-
-    # Ground plane
-    if p[2] < particle_r:
-        pen = particle_r - p[2]
-        force = force + wp.vec3(0.0, 0.0, pen * stiffness)
-        vt = wp.vec3(v[0], v[1], 0.0)
-        sp = wp.length(vt)
-        if sp > 1.0e-5:
-            fn = pen * stiffness
-            ff = wp.min(fn * 0.3, sp * damping)
-            force = force - wp.normalize(vt) * ff
-
-    # Transform to blade-local frame
-    cos_y = wp.cos(blade_yaw)
-    sin_y = wp.sin(blade_yaw)
-    cos_l = wp.cos(blade_lean)
-    sin_l = wp.sin(blade_lean)
-
-    dx = p[0] - blade_cx
-    dy = p[1] - blade_cy
-    dz = p[2] - blade_cz
-
-    lx  =  dx * cos_y + dy * sin_y
-    ly  = -dx * sin_y + dy * cos_y
-    lz  =  ly * sin_l + dz * cos_l
-    ly2 =  ly * cos_l - dz * sin_l
-
-    sx = blade_half_l + particle_r
-    sy = blade_half_w + particle_r
-    sz = blade_half_h + particle_r
-
-    if wp.abs(lx) < sx and wp.abs(ly2) < sy and wp.abs(lz) < sz:
-        px = sx - wp.abs(lx)
-        py = sy - wp.abs(ly2)
-        pz = sz - wp.abs(lz)
-        blade_pen = wp.min(px, wp.min(py, pz))
-
-        k_along   = stiffness * 0.002
-        k_lateral = stiffness
-        k_vertical = stiffness
-
-        max_pen = particle_r * 3.0
-        px = wp.min(px, max_pen)
-        py = wp.min(py, max_pen)
-        pz = wp.min(pz, max_pen)
-
-        local_force = wp.vec3(0.0, 0.0, 0.0)
-        if px < py and px < pz:
-            sign = 1.0
-            if lx < 0.0:
-                sign = -1.0
-            local_force = wp.vec3(sign * px * k_along, 0.0, 0.0)
-        elif py < pz:
-            sign = 1.0
-            if ly2 < 0.0:
-                sign = -1.0
-            local_force = wp.vec3(0.0, sign * py * k_lateral, 0.0)
-        else:
-            sign = 1.0
-            if lz < 0.0:
-                sign = -1.0
-            local_force = wp.vec3(0.0, 0.0, sign * pz * k_vertical)
-
-        # Rotate back to world frame
-        fy_world_local = local_force[1] * cos_l + local_force[2] * sin_l
-        fz_world_local = -local_force[1] * sin_l + local_force[2] * cos_l
-        fx_world = local_force[0] * cos_y - fy_world_local * sin_y
-        fy_world = local_force[0] * sin_y + fy_world_local * cos_y
-        fz_world = fz_world_local
-
-        world_force = wp.vec3(fx_world, fy_world, fz_world)
-        force = force + world_force
-        wp.atomic_add(blade_fx_out, 0, -world_force)
-
-    pen_out[i] = blade_pen
-
-    # Damping + integration
-    force = force - v * damping
-    v_new = v + force * dt / ICE_RHO
-    p_new = p + v_new * dt
-    vel[i] = v_new
-    pos[i] = p_new
+    pen[i] = max_pen
 
 
 # ────────────────────────────────────────────────────────────────────
