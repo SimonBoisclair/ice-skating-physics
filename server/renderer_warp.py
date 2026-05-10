@@ -189,9 +189,30 @@ class WarpParticleRenderer:
         cx, cy, cz = center
         h = size * 0.5
         verts = np.array([
-            (cx - h, cy - h, cz - h), (cx + h, cy - h, cz - h), (cx + h, cy + h, cz - h), (cx - h, cy + h, cz - h),
-            (cx - h, cy - h, cz + h), (cx + h, cy - h, cz + h), (cx + h, cy + h, cz + h), (cx - h, cy + h, cz + h),
+            (-h, -h, -h), (h, -h, -h), (h, h, -h), (-h, h, -h),
+            (-h, -h, h), (h, -h, h), (h, h, h), (-h, h, h),
         ], dtype=np.float32)
+
+        # Rotate 45 deg around X, then 45 deg around Y -> corner points down
+        angle = math.pi / 4.0
+        cos_a = math.cos(angle)
+        sin_a = math.sin(angle)
+        # Rx(45)
+        rotated = verts.copy()
+        y_new = rotated[:, 1] * cos_a - rotated[:, 2] * sin_a
+        z_new = rotated[:, 1] * sin_a + rotated[:, 2] * cos_a
+        rotated[:, 1] = y_new
+        rotated[:, 2] = z_new
+        # Ry(45)
+        x_new = rotated[:, 0] * cos_a + rotated[:, 2] * sin_a
+        z_new2 = -rotated[:, 0] * sin_a + rotated[:, 2] * cos_a
+        rotated[:, 0] = x_new
+        rotated[:, 2] = z_new2
+        verts = rotated
+        # Translate to center
+        verts[:, 0] += cx
+        verts[:, 1] += cy
+        verts[:, 2] += cz
         faces = np.array([
             0, 2, 1, 0, 3, 2,
             4, 5, 6, 4, 6, 7,
