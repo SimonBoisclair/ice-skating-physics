@@ -10,7 +10,7 @@ from .config import (
     SCALE, ICE_L, ICE_W, ICE_H, N_ICE,
     CUBE_CONTACT_DAMPING, CUBE_CONTACT_FRICTION, CUBE_CONTACT_STIFFNESS,
     CUBE_DROP_GAP, CUBE_MASS, CUBE_SIZE,
-    DT, G, PARTICLE_R, STIFFNESS_BASE, DAMPING, CONTACT_DAMPING, STL_PATH,
+    DT, G, PARTICLE_R, STIFFNESS_BASE, CONTACT_DAMPING, STL_PATH,
 )
 from .kernels import init_ice_lattice, physics_step_particles_only
 
@@ -40,6 +40,7 @@ class ParticlePoolSimulation:
         self.cube_vel = wp.zeros(1, dtype=wp.vec3, device="cuda:0")
         self.cube_force = wp.zeros(3, dtype=float, device="cuda:0")
         self.cube_mesh_verts, self.cube_mesh_faces = self._build_cube_collider_mesh()
+        self.cube_corner_depth = float(abs(min(v[2] for v in self.cube_mesh_verts.numpy())))
 
         self.reset_particles()
         print("[physics] Particles-only pool simulation ready.", flush=True)
@@ -157,7 +158,6 @@ class ParticlePoolSimulation:
                     N_ICE,
                     sub_dt,
                     STIFFNESS_BASE * (self.ice_hardness_mpa / 7.0),
-                    DAMPING,
                     PARTICLE_R,
                     ICE_L,
                     ICE_W,
@@ -166,7 +166,7 @@ class ParticlePoolSimulation:
                     CUBE_CONTACT_STIFFNESS,
                     CUBE_CONTACT_DAMPING,
                     CUBE_CONTACT_FRICTION,
-                    CONTACT_DAMPING,
+                    CONTACT_DAMPING * (self.ice_hardness_mpa / 7.0),
                 ],
                 device="cuda:0",
             )
@@ -178,11 +178,9 @@ class ParticlePoolSimulation:
             cube_force[2] -= self.cube_mass * G * SCALE
             cube_vel = cube_vel + (cube_force / self.cube_mass) * sub_dt
             cube_pos = cube_pos + cube_vel * sub_dt
-            # Floor constraint: cube cannot go below z=0
-            cube_half_extent = CUBE_SIZE * 0.5 * 1.22  # rotated corner extent
-            if cube_pos[2] < cube_half_extent:
-                cube_pos[2] = cube_half_extent
-                cube_vel[2] = 0.0  # no bounce (plastic)
+            if cube_pos[2] < self.cube_corner_depth:
+                cube_pos[2] = self.cube_corner_depth
+                cube_vel[2] = 0.0
             self.cube_pos.assign(np.array([cube_pos], dtype=np.float32))
             self.cube_vel.assign(np.array([cube_vel], dtype=np.float32))
         return self.get_state()
