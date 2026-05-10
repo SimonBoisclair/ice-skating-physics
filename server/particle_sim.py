@@ -10,7 +10,7 @@ from .config import (
     SCALE, ICE_L, ICE_W, ICE_H, N_ICE,
     CUBE_CONTACT_DAMPING, CUBE_CONTACT_FRICTION, CUBE_CONTACT_STIFFNESS,
     CUBE_DROP_GAP, CUBE_MASS, CUBE_SIZE,
-    DT, G, PARTICLE_R, STIFFNESS_BASE, DAMPING, STL_PATH,
+    DT, G, PARTICLE_R, STIFFNESS_BASE, DAMPING, CONTACT_DAMPING, STL_PATH,
 )
 from .kernels import init_ice_lattice, physics_step_particles_only
 
@@ -166,6 +166,7 @@ class ParticlePoolSimulation:
                     CUBE_CONTACT_STIFFNESS,
                     CUBE_CONTACT_DAMPING,
                     CUBE_CONTACT_FRICTION,
+                    CONTACT_DAMPING,
                 ],
                 device="cuda:0",
             )
@@ -177,6 +178,11 @@ class ParticlePoolSimulation:
             cube_force[2] -= self.cube_mass * G * SCALE
             cube_vel = cube_vel + (cube_force / self.cube_mass) * sub_dt
             cube_pos = cube_pos + cube_vel * sub_dt
+            # Floor constraint: cube cannot go below z=0
+            cube_half_extent = CUBE_SIZE * 0.5 * 1.22  # rotated corner extent
+            if cube_pos[2] < cube_half_extent:
+                cube_pos[2] = cube_half_extent
+                cube_vel[2] = 0.0  # no bounce (plastic)
             self.cube_pos.assign(np.array([cube_pos], dtype=np.float32))
             self.cube_vel.assign(np.array([cube_vel], dtype=np.float32))
         return self.get_state()

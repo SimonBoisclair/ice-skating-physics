@@ -5,7 +5,7 @@ All kernels run on CUDA. They are compiled once at import time by Warp's JIT.
 """
 import warp as wp
 
-from .config import G, ICE_RHO
+from .config import G, ICE_RHO, RESTITUTION, VEL_DAMP_POST
 
 
 @wp.func
@@ -157,6 +157,7 @@ def physics_step_particles_only(
     cube_contact_stiffness: float,
     cube_contact_damping: float,
     cube_contact_friction: float,
+    contact_damping: float,
 ):
     tid = wp.tid()
     if tid >= n:
@@ -171,8 +172,8 @@ def physics_step_particles_only(
     force = wp.vec3(0.0, 0.0, -G * ICE_RHO)
     contact_d = 2.0 * particle_r
     k_contact = stiffness
-    k_damp = damping
-    k_friction = damping * 0.1
+    k_damp = contact_damping
+    k_friction = contact_damping * 0.1
     k_mu = 0.5
     max_pen = 0.0
 
@@ -244,8 +245,11 @@ def physics_step_particles_only(
                 max_pen = wp.max(max_pen, -gap)
                 force = force + dem_contact_force(normal, vrel, gap, k_contact, k_damp, k_friction, k_mu)
 
-    force = force - v * damping
     v_new = v + force * dt / ICE_RHO
+    # Multiplicative velocity damping (no linear drag)
+    v_new = v_new * damping
+    # Extra post-collision damping for plastic ice behavior
+    v_new = v_new * VEL_DAMP_POST
     p_new = p + v_new * dt
     p_new = wp.vec3(
         wp.clamp(p_new[0], -ice_l * 0.5 + particle_r, ice_l * 0.5 - particle_r),
